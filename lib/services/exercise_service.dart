@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import '../models/exercise.dart';
@@ -53,7 +54,9 @@ class ExerciseService {
     final exercises = await getExercises();
     try {
       return exercises.firstWhere((e) => e.id == selectedId);
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('ExerciseService failed to find selected exercise: $e');
+      debugPrintStack(stackTrace: st);
       return null;
     }
   }

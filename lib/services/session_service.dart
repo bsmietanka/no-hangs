@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import '../models/rep.dart';
 import '../models/exercise.dart';
 import 'database_service.dart';
@@ -113,7 +115,9 @@ class SessionService {
       reset();
       
       return true;
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('SessionService failed to save session: $e');
+      debugPrintStack(stackTrace: st);
       return false;
     }
   }

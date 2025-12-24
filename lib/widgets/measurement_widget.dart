@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import 'dart:async';
-import 'dart:typed_data';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'dart:math' as math;
@@ -33,7 +33,7 @@ class MeasurementWidget extends StatefulWidget {
   final Function(Exercise)? onExerciseSwitch;
 
   const MeasurementWidget({
-    Key? key,
+    super.key,
     required this.device,
     this.bufferSize = 100,
     this.ackNotifier,
@@ -42,7 +42,7 @@ class MeasurementWidget extends StatefulWidget {
     this.currentSide = 'L',
     this.exercises = const [],
     this.onExerciseSwitch,
-  }) : super(key: key);
+  });
 
   @override
   State<MeasurementWidget> createState() => MeasurementWidgetState();
@@ -197,8 +197,9 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
       await _dataChar!.setNotifyValue(true);
 
       _charSub = _dataChar!.onValueReceived.listen(_handleNotification);
-    } catch (_) {
-      // ignore errors - keep widget minimal
+    } catch (e, st) {
+      debugPrint('Failed to subscribe to data characteristic: $e');
+      debugPrintStack(stackTrace: st);
     }
   }
 
@@ -301,7 +302,9 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
         _buffer.addAll(newSamples);
         // Buffer size: 100 measurements per second × graph window seconds
         final effectiveBufferSize = _graphWindowSeconds * 100;
-        while (_buffer.length > effectiveBufferSize) _buffer.removeAt(0);
+        while (_buffer.length > effectiveBufferSize) {
+          _buffer.removeAt(0);
+        }
         // Update adaptive max weight if any new sample exceeds current max
         final double observedMax = newSamples.map((s) => s.weight).reduce((a, b) => a > b ? a : b);
         if (observedMax > _maxWeight) {
@@ -317,8 +320,9 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
           _repDetector.processSample(sample.weight, sample.receivedAt, widget.currentSide);
         }
       });
-    } catch (_) {
-      // silent fail
+    } catch (e, st) {
+      debugPrint('Failed to process measurement notification: $e');
+      debugPrintStack(stackTrace: st);
     }
   }
 
@@ -328,7 +332,10 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
     if (_dataChar != null && widget.device != null) {
       try {
         _dataChar!.setNotifyValue(false);
-      } catch (_) {}
+      } catch (e, st) {
+        debugPrint('Unable to disable notifications: $e');
+        debugPrintStack(stackTrace: st);
+      }
     }
     _dataChar = null;
   }
@@ -365,7 +372,7 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
     } else {
       final minutes = elapsed.inMinutes;
       final secs = seconds % 60;
-      return '${minutes}:${secs.toString().padLeft(2, '0')}';
+      return '$minutes:${secs.toString().padLeft(2, '0')}';
     }
   }
 
@@ -439,7 +446,7 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
             color: Theme.of(context).colorScheme.surface,
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.1),
+                color: Colors.black.withAlpha((0.1 * 255).round()),
                 blurRadius: 8,
                 offset: const Offset(0, -2),
               ),

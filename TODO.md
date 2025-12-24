@@ -4,7 +4,6 @@
 - [ ] **BLE reliability**: Auto-reconnect, save state on disconnect, handle backgrounding/timeouts, better error messages
 - [ ] **Session notes**: Optional notes with tags (tired/injured/great), star rating, display on history page
 - [ ] **UX improvements**: Landscape support, tablet layouts
-- [ ] **Code quality**: Error handling review, logging, memory leak checks
 
 ---
 
@@ -25,6 +24,11 @@
 - [x] Refactored session management (SessionService)
 - [x] Quick exercise switcher (horizontal swipe with auto-save)
 - [x] Dark mode with theme system (Material 3, custom theme extensions)
+- [x] Mounted checks around async context usages (guarded ScaffoldMessenger and dialog flows)
+- [x] Improved error logging and replaced silent catches with debug logs
+- [x] Ensured BLE subscriptions/timers are disposed in `BleConnectWidget`
+- [x] Added database error handling and graceful fallbacks in `DatabaseService`
+- [x] Fixed analyzer info-level lints (deprecated APIs, use_super_parameters, minor lint fixes)
 
 ---
 

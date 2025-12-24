@@ -5,7 +5,7 @@ import '../services/database_service.dart';
 import '../services/exercise_service.dart';
 
 class HistoryPage extends StatefulWidget {
-  const HistoryPage({Key? key}) : super(key: key);
+  const HistoryPage({super.key});
 
   @override
   State<HistoryPage> createState() => _HistoryPageState();

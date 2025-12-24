@@ -13,11 +13,11 @@ class BleConnectWidget extends StatefulWidget {
   final ValueListenable<bool>? ackNotifier;
 
   const BleConnectWidget({
-    Key? key,
+    super.key,
     this.targetNamePrefix = 'progressor',
     this.onConnectionChanged,
     this.ackNotifier,
-  }) : super(key: key);
+  });
 
   @override
   State<BleConnectWidget> createState() => _BleConnectWidgetState();
@@ -75,9 +75,8 @@ class _BleConnectWidgetState extends State<BleConnectWidget> {
               sub = FlutterBluePlus.scanResults.listen((r) {
                 final filtered = r
                     .where(
-                      (e) =>
-                          e.device.name.isNotEmpty &&
-                          e.device.name.toLowerCase().contains(
+                      (e) => e.device.platformName.isNotEmpty &&
+                          e.device.platformName.toLowerCase().contains(
                                 widget.targetNamePrefix.toLowerCase(),
                               ),
                     )
@@ -93,7 +92,9 @@ class _BleConnectWidgetState extends State<BleConnectWidget> {
                 await FlutterBluePlus.isScanning.where((v) => v == false).first;
                 try {
                   await FlutterBluePlus.stopScan();
-                } catch (_) {}
+                } catch (e, st) {
+                  _log('Failed to stop scanning when selecting device', e, st);
+                }
                 scanning = false;
                 setStateDialog(() {});
               });
@@ -115,18 +116,19 @@ class _BleConnectWidgetState extends State<BleConnectWidget> {
                         child: ListView.separated(
                           shrinkWrap: true,
                           itemCount: results.length,
-                          separatorBuilder: (_, __) => const Divider(height: 1),
-                          itemBuilder: (_, i) {
+                          separatorBuilder: (context, index) => const Divider(height: 1),
+                          itemBuilder: (context, i) {
                             final d = results[i].device;
+                            final name = d.platformName.isEmpty ? '(unknown)' : d.platformName;
                             return ListTile(
-                              title: Text(
-                                d.name.isEmpty ? '(unknown)' : d.name,
-                              ),
-                              subtitle: Text(d.id.id),
+                              title: Text(name),
+                              subtitle: Text(d.remoteId.str),
                               onTap: () async {
                                 try {
                                   await FlutterBluePlus.stopScan();
-                                } catch (_) {}
+                                } catch (e, st) {
+                                  _log('Failed to stop scanning for device list', e, st);
+                                }
                                 await sub?.cancel();
                                 if (!ctx.mounted) return;
                                 Navigator.of(ctx).pop(d);
@@ -143,7 +145,9 @@ class _BleConnectWidgetState extends State<BleConnectWidget> {
                     onPressed: () async {
                       try {
                         await FlutterBluePlus.stopScan();
-                      } catch (_) {}
+                      } catch (e, st) {
+                        _log('Failed to stop scanning when cancelling device picker', e, st);
+                      }
                       await sub?.cancel();
                       if (!ctx.mounted) return;
                       Navigator.of(ctx).pop(null);
@@ -159,10 +163,14 @@ class _BleConnectWidgetState extends State<BleConnectWidget> {
 
     try {
       await sub?.cancel();
-    } catch (_) {}
+    } catch (e, st) {
+      _log('Failed to cancel scan subscription', e, st);
+    }
     try {
       await FlutterBluePlus.stopScan();
-    } catch (_) {}
+    } catch (e, st) {
+      _log('Failed to stop scan after dialog', e, st);
+    }
 
     return chosen;
   }
@@ -276,7 +284,9 @@ class _BleConnectWidgetState extends State<BleConnectWidget> {
     final messenger = ScaffoldMessenger.of(context);
     try {
       await device.disconnect();
-    } catch (_) {}
+    } catch (e, st) {
+      _log('Disconnect command failed', e, st);
+    }
     await _connectionSub?.cancel();
     _stopBatteryTimer();
     _protocol?.dispose();
@@ -296,6 +306,14 @@ class _BleConnectWidgetState extends State<BleConnectWidget> {
         backgroundColor: backgroundColor,
       ),
     );
+  }
+  
+  void _log(String message, [Object? error, StackTrace? stackTrace]) {
+    final details = error != null ? ' Error: $error' : '';
+    debugPrint('$message$details');
+    if (stackTrace != null) {
+      debugPrintStack(stackTrace: stackTrace);
+    }
   }
 
   @override

@@ -14,14 +14,14 @@ class SettingsPage extends StatefulWidget {
   final Function(ThemeMode) onThemeModeChanged;
 
   const SettingsPage({
-    Key? key,
+    super.key,
     required this.graphWindowSeconds,
     required this.onGraphWindowChanged,
     required this.repThreshold,
     required this.onRepThresholdChanged,
     required this.currentThemeMode,
     required this.onThemeModeChanged,
-  }) : super(key: key);
+  });
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
