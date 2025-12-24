@@ -384,11 +384,6 @@ class _HistoryPageState extends State<HistoryPage> {
     return endOfDay.millisecondsSinceEpoch.toDouble();
   }
 
-  double? _calculateXAxisInterval() {
-    // One day in milliseconds
-    return 86400000.0;
-  }
-
   String _formatTimestamp(int timestamp) {
     final date = DateTime.fromMillisecondsSinceEpoch(timestamp);
     
@@ -400,37 +395,6 @@ class _HistoryPageState extends State<HistoryPage> {
       case 'session':
       default:
         return '${date.day}/${date.month}';
-    }
-  }
-
-  String _formatXAxisLabel(int index) {
-    if (index >= _historyData.length) return '';
-    
-    final point = _historyData[index];
-    final timeGroup = point['time_group'] as String;
-    
-    switch (_groupBy) {
-      case 'day':
-        // Format: "12/20"
-        final parts = timeGroup.split('-');
-        if (parts.length >= 3) {
-          return '${parts[1]}/${parts[2]}';
-        }
-        return timeGroup;
-      case 'week':
-        // Format: "W50"
-        return timeGroup.split('-').last;
-      case 'month':
-        // Format: "12/25"
-        final parts = timeGroup.split('-');
-        if (parts.length >= 2) {
-          return '${parts[1]}/${parts[0].substring(2)}';
-        }
-        return timeGroup;
-      case 'session':
-      default:
-        // Just show index number
-        return '${index + 1}';
     }
   }
 }

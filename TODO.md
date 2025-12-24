@@ -3,7 +3,7 @@
 - [ ] **Data backup/export**: JSON/CSV import/export of all session data and exercise definitions
 - [ ] **BLE reliability**: Auto-reconnect, save state on disconnect, handle backgrounding/timeouts, better error messages
 - [ ] **Session notes**: Optional notes with tags (tired/injured/great), star rating, display on history page
-- [ ] **UX improvements**: Quick exercise switcher, dark mode, landscape support, tablet layouts
+- [ ] **UX improvements**: Landscape support, tablet layouts
 - [ ] **Code quality**: Error handling review, logging, memory leak checks
 
 ---
@@ -20,6 +20,11 @@
 - [x] Delete all sessions functionality
 - [x] Android release signing configuration
 - [x] App bundle build for Play Store
+- [x] Refactored BLE protocol handler (TindeqProtocol service)
+- [x] Refactored rep detection logic (RepDetectionService)
+- [x] Refactored session management (SessionService)
+- [x] Quick exercise switcher (horizontal swipe with auto-save)
+- [x] Dark mode with theme system (Material 3, custom theme extensions)
 
 ---
 

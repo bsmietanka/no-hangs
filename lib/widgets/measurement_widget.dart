@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -6,6 +7,9 @@ import 'package:fl_chart/fl_chart.dart';
 import 'dart:math' as math;
 import '../models/exercise.dart';
 import '../services/database_service.dart';
+import '../services/rep_detection_service.dart';
+import '../services/session_service.dart';
+import '../theme/app_theme.dart';
 
 /// Simple measurement container (weight in kg, timestamp in microseconds)
 class MeasurementSample {
@@ -13,32 +17,6 @@ class MeasurementSample {
   final int useconds;
   final DateTime receivedAt; // local arrival timestamp
   MeasurementSample(this.weight, this.useconds) : receivedAt = DateTime.now();
-}
-
-/// Repetition data
-class Rep {
-  final DateTime startTime;
-  final DateTime endTime;
-  final double peakWeight;
-  final double averageWeight;
-  final double medianWeight;
-  final String side; // 'L' or 'R' for two-sided exercises
-  final List<double> timeSeries; // Weight samples during rep
-  final Duration duration;
-  
-  Rep(this.startTime, this.endTime, this.peakWeight, this.averageWeight, this.medianWeight, this.side, this.timeSeries)
-    : duration = endTime.difference(startTime);
-  
-  static double _calculateMedian(List<double> values) {
-    if (values.isEmpty) return 0.0;
-    final sorted = List<double>.from(values)..sort();
-    final middle = sorted.length ~/ 2;
-    if (sorted.length % 2 == 1) {
-      return sorted[middle];
-    } else {
-      return (sorted[middle - 1] + sorted[middle]) / 2.0;
-    }
-  }
 }
 
 /// Minimal measurement widget: subscribes to the Progressor "Data" characteristic
@@ -51,6 +29,8 @@ class MeasurementWidget extends StatefulWidget {
   final int graphWindowSeconds;
   final Exercise? selectedExercise;
   final String currentSide;
+  final List<Exercise> exercises;
+  final Function(Exercise)? onExerciseSwitch;
 
   const MeasurementWidget({
     Key? key,
@@ -60,6 +40,8 @@ class MeasurementWidget extends StatefulWidget {
     this.graphWindowSeconds = 10,
     this.selectedExercise,
     this.currentSide = 'L',
+    this.exercises = const [],
+    this.onExerciseSwitch,
   }) : super(key: key);
 
   @override
@@ -81,7 +63,7 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
   
   // Public methods for parent widget
   bool hasUnsavedReps() {
-    return _reps.isNotEmpty;
+    return _sessionService.hasUnsavedData;
   }
   
   Future<void> saveSession() async {
@@ -91,18 +73,10 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
   double _maxWeight = _initialMaxWeight;
   
   // Repetition tracking
-  double _repThreshold = 1.0; // kg threshold for rep detection
-  bool _inRep = false;
-  DateTime? _repStartTime;
-  double _currentRepPeak = 0.0;
-  final List<double> _currentRepWeights = [];
-  final List<Rep> _reps = [];
+  late RepDetectionService _repDetector;
+  final SessionService _sessionService = SessionService();
   DateTime? _lastRepTime; // Track when last rep was completed
   Timer? _timeSinceRepTimer; // Timer to update UI every second
-  
-  // Session tracking
-  DateTime? _sessionStartTime;
-  double _sessionMax = 0.0;
   double? _personalBest; // Historical best for this exercise
   double? _personalBestL; // PB for left side
   double? _personalBestR; // PB for right side
@@ -116,15 +90,28 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
   // Public method to update rep threshold from settings
   void updateRepThreshold(double threshold) {
     setState(() {
-      _repThreshold = threshold;
+      _repDetector.threshold = threshold;
     });
   }
   
   @override
   void initState() {
     super.initState();
+    
+    // Initialize rep detection service
+    _repDetector = RepDetectionService(
+      threshold: 1.0,
+      onRepCompleted: (rep) {
+        setState(() {
+          _sessionService.addRep(rep);
+          _lastRepTime = rep.endTime;
+        });
+        debugPrint('Rep completed: peak=${rep.peakWeight.toStringAsFixed(2)} kg, avg=${rep.avgWeight.toStringAsFixed(2)} kg, median=${rep.medianWeight.toStringAsFixed(2)} kg, side=${rep.side}, duration=${rep.endTime.difference(rep.startTime).inMilliseconds}ms');
+      },
+    );
+    
     if (widget.device != null) {
-      _sessionStartTime = DateTime.now();
+      _sessionService.startSession();
       _loadPersonalBest();
       _discoverAndSubscribe();
     }
@@ -145,13 +132,8 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
       setState(() {
         _buffer.clear();
         _maxWeight = _initialMaxWeight;
-        _reps.clear();
-        _inRep = false;
-        _repStartTime = null;
-        _currentRepPeak = 0.0;
-        _currentRepWeights.clear();
-        _sessionStartTime = DateTime.now();
-        _sessionMax = 0.0;
+        _sessionService.reset();
+        _repDetector.reset();
       });
       _loadPersonalBest();
     }
@@ -161,7 +143,7 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
       if (widget.device != null) {
         // Start session time immediately when device connects
         setState(() {
-          _sessionStartTime = DateTime.now();
+          _sessionService.startSession();
         });
         _discoverAndSubscribe();
       } else {
@@ -169,13 +151,8 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
           _buffer.clear();
           _dataChar = null;
           _maxWeight = _initialMaxWeight; // reset adaptive max on disconnect
-          _reps.clear();
-          _inRep = false;
-          _repStartTime = null;
-          _currentRepPeak = 0.0;
-          _currentRepWeights.clear();
-          _sessionStartTime = null;
-          _sessionMax = 0.0;
+          _sessionService.clear();
+          _repDetector.reset();
         });
       }
     }
@@ -256,6 +233,12 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
       _personalBestL = pbL;
       _personalBestR = pbR;
       _updateTargetWeight();
+      // Initialize the input controller with the current value
+      if (_targetIsPercentage) {
+        _targetInputController.text = _targetPercentage.toStringAsFixed(0);
+      } else {
+        _targetInputController.text = _targetWeight?.toStringAsFixed(1) ?? '0.0';
+      }
     });
   }
 
@@ -325,42 +308,13 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
           _maxWeight = observedMax;
         }
         // Track session maximum
-        if (observedMax > _sessionMax) {
-          _sessionMax = observedMax;
+        if (observedMax > _sessionService.sessionMax) {
+          _sessionService.updateSessionMax(observedMax);
         }
         
         // Rep detection: process each new sample
         for (final sample in newSamples) {
-          if (!_inRep && sample.weight >= _repThreshold) {
-            // Start new rep
-            _inRep = true;
-            _repStartTime = sample.receivedAt;
-            _currentRepPeak = sample.weight;
-            _currentRepWeights.clear();
-            _currentRepWeights.add(sample.weight);
-          } else if (_inRep) {
-            // Track weight during rep
-            _currentRepWeights.add(sample.weight);
-            // Update peak during rep
-            if (sample.weight > _currentRepPeak) {
-              _currentRepPeak = sample.weight;
-            }
-            // End rep when dropping below threshold
-            if (sample.weight < _repThreshold) {
-              _inRep = false;
-              if (_repStartTime != null && _currentRepWeights.isNotEmpty) {
-                final avgWeight = _currentRepWeights.reduce((a, b) => a + b) / _currentRepWeights.length;
-                final medianWeight = Rep._calculateMedian(_currentRepWeights);
-                final timeSeries = List<double>.from(_currentRepWeights);
-                _reps.add(Rep(_repStartTime!, sample.receivedAt, _currentRepPeak, avgWeight, medianWeight, widget.currentSide, timeSeries));
-                _lastRepTime = sample.receivedAt; // Track when this rep was completed
-                debugPrint('Rep completed: peak=${_currentRepPeak.toStringAsFixed(2)} kg, avg=${avgWeight.toStringAsFixed(2)} kg, median=${medianWeight.toStringAsFixed(2)} kg, side=${widget.currentSide}, duration=${sample.receivedAt.difference(_repStartTime!).inMilliseconds}ms');
-              }
-              _repStartTime = null;
-              _currentRepPeak = 0.0;
-              _currentRepWeights.clear();
-            }
-          }
+          _repDetector.processSample(sample.weight, sample.receivedAt, widget.currentSide);
         }
       });
     } catch (_) {
@@ -380,62 +334,27 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
   }
 
   Future<void> _saveSession() async {
-    if (_reps.isEmpty || _sessionStartTime == null || widget.selectedExercise == null) {
+    if (widget.selectedExercise == null) {
       return;
     }
 
-    try {
-      final sessionDuration = DateTime.now().difference(_sessionStartTime!);
-      final repsData = _reps.map((rep) => {
-        'side': rep.side,
-        'start_time': rep.startTime.millisecondsSinceEpoch,
-        'end_time': rep.endTime.millisecondsSinceEpoch,
-        'duration_ms': rep.duration.inMilliseconds,
-        'peak_weight': rep.peakWeight,
-        'average_weight': rep.averageWeight,
-        'median_weight': rep.medianWeight,
-        'time_series': rep.timeSeries,
-      }).toList();
-
-      await _databaseService.saveSession(
-        startTime: _sessionStartTime!,
-        exerciseId: widget.selectedExercise!.id,
-        exerciseName: widget.selectedExercise!.name,
-        durationSeconds: sessionDuration.inSeconds,
-        reps: repsData,
-      );
-
-      if (mounted) {
+    final success = await _sessionService.saveSession(widget.selectedExercise!);
+    
+    if (mounted) {
+      if (success) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Session saved: ${_reps.length} reps')),
+          SnackBar(content: Text('Session saved: ${_sessionService.repCount} reps')),
         );
-        
-        // Reset after save
-        setState(() {
-          _reps.clear();
-          _inRep = false;
-          _repStartTime = null;
-          _currentRepPeak = 0.0;
-          _currentRepWeights.clear();
-          _sessionStartTime = DateTime.now();
-          _sessionMax = 0.0;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
+      } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error saving session: $e')),
+          const SnackBar(content: Text('Error saving session')),
         );
       }
     }
   }
 
   String _formatSessionTime() {
-    if (_sessionStartTime == null) return '--:--';
-    final duration = DateTime.now().difference(_sessionStartTime!);
-    final minutes = duration.inMinutes;
-    final seconds = duration.inSeconds % 60;
-    return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+    return _sessionService.formatSessionTime();
   }
   String _formatTimeSinceLastRep() {
     if (_lastRepTime == null) return '-';
@@ -451,14 +370,15 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
   }
 
   Widget _buildStatDisplay(String label, String value, Color color) {
+    final appColors = Theme.of(context).extension<AppColors>()!;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
           label,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 10,
-            color: Colors.black54,
+            color: appColors.statLabel,
           ),
         ),
         const SizedBox(height: 2),
@@ -474,11 +394,36 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
     );
   }
 
+  void _handleSwipe(DragEndDetails details) async {
+    final velocity = details.primaryVelocity ?? 0;
+    if (velocity.abs() < 500) return; // Require minimum swipe speed
+    if (widget.exercises.isEmpty || widget.selectedExercise == null) return;
+    
+    final currentIndex = widget.exercises.indexWhere((e) => e.id == widget.selectedExercise!.id);
+    if (currentIndex == -1) return;
+    
+    final newIndex = velocity > 0 
+        ? (currentIndex - 1 + widget.exercises.length) % widget.exercises.length
+        : (currentIndex + 1) % widget.exercises.length;
+    
+    final newExercise = widget.exercises[newIndex];
+    
+    // Haptic feedback
+    HapticFeedback.lightImpact();
+    
+    // Notify parent to switch exercise
+    widget.onExerciseSwitch?.call(newExercise);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final appColors = Theme.of(context).extension<AppColors>()!;
     // Render chart without fixed aspect ratio
-    return Column(
-      children: [
+    return GestureDetector(
+      onHorizontalDragEnd: _handleSwipe,
+      behavior: HitTestBehavior.opaque,
+      child: Column(
+        children: [
         Expanded(
           child: Container(
             color: Theme.of(context).scaffoldBackgroundColor,
@@ -504,12 +449,12 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
             mainAxisSize: MainAxisSize.min,
             children: [
               // Last rep details (if available)
-              if (_reps.isNotEmpty) ...[
-                const Text(
+              if (_sessionService.hasUnsavedData) ...[
+                Text(
                   'Last Rep',
                   style: TextStyle(
                     fontSize: 12,
-                    color: Colors.black54,
+                    color: appColors.statLabel,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
@@ -517,10 +462,10 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
-                    _buildStatDisplay('Duration', '${(_reps.last.duration.inMilliseconds / 1000).toStringAsFixed(1)}s', Colors.grey[700]!),
-                    _buildStatDisplay('Max', '${_reps.last.peakWeight.toStringAsFixed(1)} kg', Colors.grey[700]!),
-                    _buildStatDisplay('Average', '${_reps.last.averageWeight.toStringAsFixed(1)} kg', Colors.grey[700]!),
-                    _buildStatDisplay('Median', '${_reps.last.medianWeight.toStringAsFixed(1)} kg', Colors.grey[700]!),
+                    _buildStatDisplay('Duration', '${(_sessionService.lastRep!.duration.inMilliseconds / 1000).toStringAsFixed(1)}s', appColors.statLastRepDuration),
+                    _buildStatDisplay('Max', '${_sessionService.lastRep!.peakWeight.toStringAsFixed(1)} kg', appColors.statLastRepMax),
+                    _buildStatDisplay('Average', '${_sessionService.lastRep!.avgWeight.toStringAsFixed(1)} kg', appColors.statLastRepAverage),
+                    _buildStatDisplay('Median', '${_sessionService.lastRep!.medianWeight.toStringAsFixed(1)} kg', appColors.statLastRepMedian),
                   ],
                 ),
                 const Divider(height: 16),
@@ -529,25 +474,25 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceAround,
                 children: [
-                  _buildStatDisplay('Session Max', '${_sessionMax.toStringAsFixed(1)} kg', Colors.black87),
+                  _buildStatDisplay('Session Max', '${_sessionService.sessionMax.toStringAsFixed(1)} kg', appColors.statSessionMax),
                   if (widget.selectedExercise?.isTwoSided == true) ...[
-                    _buildStatDisplay('PB L', '${_personalBestL?.toStringAsFixed(1) ?? '-'} kg', Colors.green),
-                    _buildStatDisplay('PB R', '${_personalBestR?.toStringAsFixed(1) ?? '-'} kg', Colors.green),
+                    _buildStatDisplay('PB L', '${_personalBestL?.toStringAsFixed(1) ?? '-'} kg', appColors.statPersonalBest),
+                    _buildStatDisplay('PB R', '${_personalBestR?.toStringAsFixed(1) ?? '-'} kg', appColors.statPersonalBest),
                   ] else
-                    _buildStatDisplay('PB', '${_personalBest?.toStringAsFixed(1) ?? '-'} kg', Colors.green),
-                  _buildStatDisplay('Session Time', _formatSessionTime(), Colors.grey[600]!),
+                    _buildStatDisplay('PB', '${_personalBest?.toStringAsFixed(1) ?? '-'} kg', appColors.statPersonalBest),
+                  _buildStatDisplay('Session Time', _formatSessionTime(), appColors.statSessionTime),
                 ],
               ),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceAround,
                 children: [
                   if (widget.selectedExercise?.isTwoSided == true) ...[
-                    _buildStatDisplay('L Reps', '${_reps.where((r) => r.side == 'L').length}', Colors.grey[600]!),
-                    _buildStatDisplay('R Reps', '${_reps.where((r) => r.side == 'R').length}', Colors.grey[600]!),
+                    _buildStatDisplay('L Reps', '${_sessionService.getRepsForSide('L').length}', appColors.statRepCount),
+                    _buildStatDisplay('R Reps', '${_sessionService.getRepsForSide('R').length}', appColors.statRepCount),
                   ] else
-                    _buildStatDisplay('Reps', '${_reps.length}', Colors.grey[600]!),
+                    _buildStatDisplay('Reps', '${_sessionService.repCount}', appColors.statRepCount),
                   if (_lastRepTime != null)
-                    _buildStatDisplay('Since Last', _formatTimeSinceLastRep(), Colors.grey[600]!),
+                    _buildStatDisplay('Since Last', _formatTimeSinceLastRep(), appColors.statRepCount),
                 ],
               ),
               const Divider(height: 16),
@@ -578,11 +523,11 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
                         },
                         constraints: const BoxConstraints(minWidth: 36, minHeight: 30),
                         borderRadius: const BorderRadius.all(Radius.circular(6)),
-                        color: Colors.grey[700],
-                        selectedColor: Colors.white,
-                        fillColor: Colors.blue[700],
-                        borderColor: Colors.grey[400],
-                        selectedBorderColor: Colors.blue[700],
+                        color: appColors.targetButtonText,
+                        selectedColor: appColors.targetButtonTextSelected,
+                        fillColor: appColors.targetButtonFill,
+                        borderColor: appColors.targetButtonBorder,
+                        selectedBorderColor: appColors.targetButtonBorderSelected,
                         borderWidth: 1,
                         children: const [
                           Padding(
@@ -606,6 +551,7 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
                             setState(() {
                               _targetPercentage = math.max(0, _targetPercentage - 5);
                               _updateTargetWeight();
+                              _targetInputController.text = _targetPercentage.toStringAsFixed(0);
                             });
                           },
                         ),
@@ -623,18 +569,18 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
                             ),
                             decoration: InputDecoration(
                               filled: true,
-                              fillColor: Colors.grey[100],
+                              fillColor: appColors.targetInputBackground,
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(6),
-                                borderSide: BorderSide(color: Colors.grey[300]!, width: 1),
+                                borderSide: BorderSide(color: appColors.targetInputBorder, width: 1),
                               ),
                               enabledBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(6),
-                                borderSide: BorderSide(color: Colors.grey[300]!, width: 1),
+                                borderSide: BorderSide(color: appColors.targetInputBorder, width: 1),
                               ),
                               focusedBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(6),
-                                borderSide: BorderSide(color: Colors.blue[700]!, width: 2),
+                                borderSide: BorderSide(color: appColors.targetInputBorderFocused, width: 2),
                               ),
                               contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                               suffix: Text(
@@ -642,7 +588,7 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
                                 style: TextStyle(
                                   fontWeight: FontWeight.bold,
                                   fontSize: 14,
-                                  color: Colors.grey[600],
+                                  color: appColors.targetInputText,
                                 ),
                               ),
                             ),
@@ -685,6 +631,7 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
                             setState(() {
                               _targetPercentage = (_targetPercentage + 5).clamp(50, 100);
                               _updateTargetWeight();
+                              _targetInputController.text = _targetPercentage.toStringAsFixed(0);
                             });
                           },
                         ),
@@ -696,6 +643,7 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
                           onPressed: _personalBest == null || (_targetWeight ?? 0) <= 0 ? null : () {
                             setState(() {
                               _targetWeight = math.max(0, (_targetWeight ?? 0) - 1.0);
+                              _targetInputController.text = _targetWeight?.toStringAsFixed(1) ?? '0.0';
                             });
                           },
                         ),
@@ -713,18 +661,18 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
                             ),
                             decoration: InputDecoration(
                               filled: true,
-                              fillColor: Colors.grey[100],
+                              fillColor: appColors.targetInputBackground,
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(6),
-                                borderSide: BorderSide(color: Colors.grey[300]!, width: 1),
+                                borderSide: BorderSide(color: appColors.targetInputBorder, width: 1),
                               ),
                               enabledBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(6),
-                                borderSide: BorderSide(color: Colors.grey[300]!, width: 1),
+                                borderSide: BorderSide(color: appColors.targetInputBorder, width: 1),
                               ),
                               focusedBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(6),
-                                borderSide: BorderSide(color: Colors.blue[700]!, width: 2),
+                                borderSide: BorderSide(color: appColors.targetInputBorderFocused, width: 2),
                               ),
                               contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                               suffix: Text(
@@ -732,7 +680,7 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
                                 style: TextStyle(
                                   fontWeight: FontWeight.bold,
                                   fontSize: 14,
-                                  color: Colors.grey[600],
+                                  color: appColors.targetInputText,
                                 ),
                               ),
                             ),
@@ -772,6 +720,7 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
                           onPressed: _personalBest == null || (_targetWeight ?? 0) >= (_personalBest ?? 0) ? null : () {
                             setState(() {
                               _targetWeight = math.min(_personalBest ?? double.infinity, (_targetWeight ?? 0) + 1.0);
+                              _targetInputController.text = _targetWeight?.toStringAsFixed(1) ?? '0.0';
                             });
                           },
                         ),
@@ -786,13 +735,8 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
                   ElevatedButton.icon(
                     onPressed: () {
                       setState(() {
-                        _reps.clear();
-                        _inRep = false;
-                        _repStartTime = null;
-                        _currentRepPeak = 0.0;
-                        _currentRepWeights.clear();
-                        _sessionStartTime = DateTime.now();
-                        _sessionMax = 0.0;
+                        _sessionService.reset();
+                        _repDetector.reset();
                       });
                     },
                     icon: const Icon(Icons.refresh),
@@ -802,7 +746,7 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
                     ),
                   ),
                   ElevatedButton.icon(
-                    onPressed: _reps.isEmpty ? null : _saveSession,
+                    onPressed: !_sessionService.hasUnsavedData ? null : _saveSession,
                     icon: const Icon(Icons.save),
                     label: const Text('Save Session'),
                     style: ElevatedButton.styleFrom(
@@ -815,10 +759,12 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
           ),
         ),
       ],
+      ),
     );
   }
 
   Widget _buildChart() {
+    final appColors = Theme.of(context).extension<AppColors>()!;
     if (_buffer.isEmpty) return const SizedBox.shrink(); 
 
     final now = DateTime.now();
@@ -853,7 +799,7 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
             spots: spots,
             isCurved: true,
             dotData: FlDotData(show: false),
-            color: Colors.deepPurple,
+            color: appColors.chartLine,
             barWidth: 2,
             curveSmoothness: 0.1,
           ),
@@ -866,7 +812,7 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
               ],
               isCurved: false,
               dotData: FlDotData(show: false),
-              color: Colors.orange,
+              color: appColors.chartThreshold,
               barWidth: 2,
               dashArray: [5, 5],
             ),
@@ -880,8 +826,8 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
               getTitlesWidget: (value, meta) {
                 return Text(
                   value.toStringAsFixed(1),
-                  style: const TextStyle(
-                    color: Colors.black87,
+                  style: TextStyle(
+                    color: appColors.chartAxisText,
                     fontWeight: FontWeight.bold,
                     fontSize: 14,
                   ),
@@ -901,8 +847,8 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
                   final secs = seconds % 60;
                   return Text(
                     '$mins:${secs.toString().padLeft(2, '0')}',
-                    style: const TextStyle(
-                      color: Colors.black87,
+                    style: TextStyle(
+                      color: appColors.chartAxisText,
                       fontWeight: FontWeight.bold,
                       fontSize: 12,
                     ),
@@ -910,8 +856,8 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
                 }
                 return Text(
                   '${seconds}s',
-                  style: const TextStyle(
-                    color: Colors.black87,
+                  style: TextStyle(
+                    color: appColors.chartAxisText,
                     fontWeight: FontWeight.bold,
                     fontSize: 12,
                   ),

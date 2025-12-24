@@ -47,6 +47,25 @@ No Hangs is a mobile training application for climbers that connects to Tindeq P
 - **Charts**: fl_chart
 - **Platform**: Android & iOS
 
+### Architecture
+
+The app follows a service-based architecture separating business logic from UI:
+
+**Services:**
+- `TindeqProtocol`: BLE communication protocol handler
+- `RepDetectionService`: Threshold-based rep detection algorithm
+- `SessionService`: Session state and persistence management
+- `DatabaseService`: SQLite database operations
+
+**Models:**
+- `Exercise`: Exercise configuration and metadata
+- `Rep`: Individual rep data with time series
+
+**Widgets:**
+- `BLEConnectWidget`: Device connection and BLE control
+- `MeasurementWidget`: Live weight display and rep tracking
+- `HistoryPage`: Historical data visualization
+
 ## Device Communication
 
 The app implements the Tindeq Progressor BLE protocol:
@@ -98,15 +117,19 @@ flutter build appbundle --release
 
 ```
 lib/
-├── main.dart                 # App entry point
-├── models/                   # Data models (Exercise, Rep)
-├── pages/                    # Screen widgets
-│   ├── history_page.dart    # Historical data visualization
-│   └── settings_page.dart   # App configuration
-├── services/                 # Business logic
+├── main.dart                      # App entry point
+├── models/                        # Data models
+│   ├── exercise.dart             # Exercise definitions
+│   └── rep.dart                  # Repetition data model
+├── pages/                         # Screen widgets
+│   ├── history_page.dart         # Historical data visualization
+│   └── settings_page.dart        # App configuration
+├── services/                      # Business logic
 │   ├── database_service.dart     # SQLite operations
-│   └── exercise_service.dart     # Exercise management
-└── widgets/                  # Reusable UI components
+│   ├── exercise_service.dart     # Exercise management
+│   ├── tindeq_protocol.dart      # BLE protocol handler
+│   └── rep_detection_service.dart # Rep detection logic
+└── widgets/                       # Reusable UI components
     ├── ble_connect_widget.dart   # BLE connection UI
     └── measurement_widget.dart   # Live measurement display
 ```

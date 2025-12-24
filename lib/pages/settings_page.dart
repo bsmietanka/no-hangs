@@ -3,12 +3,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/exercise.dart';
 import '../services/exercise_service.dart';
 import '../services/database_service.dart';
+import '../theme/app_theme.dart';
 
 class SettingsPage extends StatefulWidget {
   final int graphWindowSeconds;
   final Function(int) onGraphWindowChanged;
   final double repThreshold;
   final Function(double) onRepThresholdChanged;
+  final ThemeMode currentThemeMode;
+  final Function(ThemeMode) onThemeModeChanged;
 
   const SettingsPage({
     Key? key,
@@ -16,6 +19,8 @@ class SettingsPage extends StatefulWidget {
     required this.onGraphWindowChanged,
     required this.repThreshold,
     required this.onRepThresholdChanged,
+    required this.currentThemeMode,
+    required this.onThemeModeChanged,
   }) : super(key: key);
 
   @override
@@ -45,6 +50,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final appColors = Theme.of(context).extension<AppColors>()!;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Settings'),
@@ -53,6 +59,58 @@ class _SettingsPageState extends State<SettingsPage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // Theme Settings
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Appearance',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      const Text('Theme Mode'),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: SegmentedButton<ThemeMode>(
+                          showSelectedIcon: false,
+                          segments: const [
+                            ButtonSegment(
+                              value: ThemeMode.light,
+                              icon: Icon(Icons.light_mode, size: 20),
+                              tooltip: 'Light',
+                            ),
+                            ButtonSegment(
+                              value: ThemeMode.dark,
+                              icon: Icon(Icons.dark_mode, size: 20),
+                              tooltip: 'Dark',
+                            ),
+                            ButtonSegment(
+                              value: ThemeMode.system,
+                              icon: Icon(Icons.settings_brightness, size: 20),
+                              tooltip: 'System',
+                            ),
+                          ],
+                          selected: {widget.currentThemeMode},
+                          onSelectionChanged: (Set<ThemeMode> selected) {
+                            widget.onThemeModeChanged(selected.first);
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
           // Graph Window Settings
           Card(
             child: Padding(
@@ -203,9 +261,9 @@ class _SettingsPageState extends State<SettingsPage> {
                                     ),
                                     TextButton(
                                       onPressed: () => Navigator.of(ctx).pop(true),
-                                      child: const Text(
+                                      child: Text(
                                         'Delete',
-                                        style: TextStyle(color: Colors.red),
+                                        style: TextStyle(color: Theme.of(context).extension<AppColors>()!.dangerZoneText),
                                       ),
                                     ),
                                   ],
@@ -228,23 +286,24 @@ class _SettingsPageState extends State<SettingsPage> {
 
           // Danger Zone
           Card(
-            color: Colors.red.shade50,
+            color: Theme.of(context).extension<AppColors>()!.dangerZoneBackground,
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
+                  Text(
                     'Danger Zone',
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
-                      color: Colors.red,
+                      color: Theme.of(context).extension<AppColors>()!.dangerZoneText,
                     ),
                   ),
                   const SizedBox(height: 16),
                   ElevatedButton.icon(
                     onPressed: () async {
+                      final messenger = ScaffoldMessenger.of(context);
                       final confirm = await showDialog<bool>(
                         context: context,
                         builder: (ctx) => AlertDialog(
@@ -258,9 +317,9 @@ class _SettingsPageState extends State<SettingsPage> {
                             ),
                             TextButton(
                               onPressed: () => Navigator.of(ctx).pop(true),
-                              child: const Text(
+                              child: Text(
                                 'Clear All',
-                                style: TextStyle(color: Colors.red),
+                                style: TextStyle(color: Theme.of(context).extension<AppColors>()!.dangerZoneText),
                               ),
                             ),
                           ],
@@ -271,25 +330,25 @@ class _SettingsPageState extends State<SettingsPage> {
                         final prefs = await SharedPreferences.getInstance();
                         await prefs.clear();
                         await _loadExercises();
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('All data cleared'),
-                            ),
-                          );
-                        }
+                        if (!mounted) return;
+                        messenger.showSnackBar(
+                          const SnackBar(
+                            content: Text('All data cleared'),
+                          ),
+                        );
                       }
                     },
                     icon: const Icon(Icons.warning),
                     label: const Text('Clear All Data'),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red,
+                      backgroundColor: Theme.of(context).extension<AppColors>()!.dangerButton,
                       foregroundColor: Colors.white,
                     ),
                   ),
                   const SizedBox(height: 12),
                   ElevatedButton.icon(
                     onPressed: () async {
+                      final messenger = ScaffoldMessenger.of(context);
                       final confirm = await showDialog<bool>(
                         context: context,
                         builder: (ctx) => AlertDialog(
@@ -303,9 +362,9 @@ class _SettingsPageState extends State<SettingsPage> {
                             ),
                             TextButton(
                               onPressed: () => Navigator.of(ctx).pop(true),
-                              child: const Text(
+                              child: Text(
                                 'Delete All Sessions',
-                                style: TextStyle(color: Colors.red),
+                                style: TextStyle(color: Theme.of(context).extension<AppColors>()!.dangerZoneText),
                               ),
                             ),
                           ],
@@ -315,20 +374,19 @@ class _SettingsPageState extends State<SettingsPage> {
                       if (confirm == true) {
                         final dbService = DatabaseService();
                         await dbService.deleteAllSessions();
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('All session data deleted'),
-                              backgroundColor: Colors.red,
-                            ),
-                          );
-                        }
+                        if (!mounted) return;
+                        messenger.showSnackBar(
+                          SnackBar(
+                            content: const Text('All session data deleted'),
+                            backgroundColor: appColors.dangerButton,
+                          ),
+                        );
                       }
                     },
                     icon: const Icon(Icons.delete_forever),
                     label: const Text('Delete All Sessions'),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red.shade700,
+                      backgroundColor: Theme.of(context).extension<AppColors>()!.dangerButton,
                       foregroundColor: Colors.white,
                     ),
                   ),

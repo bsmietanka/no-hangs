@@ -4,6 +4,8 @@ import 'widgets/measurement_widget.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'models/exercise.dart';
 import 'services/exercise_service.dart';
+import 'services/theme_service.dart';
+import 'theme/app_theme.dart';
 import 'pages/settings_page.dart';
 import 'pages/history_page.dart';
 
@@ -11,50 +13,61 @@ void main() {
   runApp(const MyApp());
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
 
-  // This widget is the root of your application.
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  final ThemeService _themeService = ThemeService();
+  ThemeMode _themeMode = ThemeMode.system;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadThemeMode();
+  }
+
+  Future<void> _loadThemeMode() async {
+    final mode = await _themeService.getThemeMode();
+    setState(() => _themeMode = mode);
+  }
+
+  void _updateThemeMode(ThemeMode mode) async {
+    await _themeService.setThemeMode(mode);
+    setState(() => _themeMode = mode);
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+      title: 'No Hangs',
+      debugShowCheckedModeBanner: false,
+      theme: AppTheme.lightTheme(),
+      darkTheme: AppTheme.darkTheme(),
+      themeMode: _themeMode,
+      home: MyHomePage(
+        title: 'No Hangs',
+        onThemeModeChanged: _updateThemeMode,
+        currentThemeMode: _themeMode,
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
     );
   }
 }
 
 class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
+  const MyHomePage({
+    super.key,
+    required this.title,
+    required this.onThemeModeChanged,
+    required this.currentThemeMode,
+  });
 
   final String title;
+  final Function(ThemeMode) onThemeModeChanged;
+  final ThemeMode currentThemeMode;
 
   @override
   State<MyHomePage> createState() => _MyHomePageState();
@@ -89,6 +102,57 @@ class _MyHomePageState extends State<MyHomePage> {
     if (_selectedExercise != null) {
       await _exerciseService.setSelectedExercise(_selectedExercise!.id);
     }
+  }
+
+  Future<void> _switchExercise(Exercise newExercise, {bool showSaveDialog = false}) async {
+    if (newExercise.id == _selectedExercise?.id) return;
+    
+    // Check for unsaved data
+    final hasUnsavedReps = _measurementKey.currentState?.hasUnsavedReps() ?? false;
+    
+    if (hasUnsavedReps) {
+      if (showSaveDialog) {
+        // Show dialog for deliberate dropdown changes
+        final shouldSave = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Save session?'),
+            content: const Text('You have unsaved reps. Would you like to save this session before switching exercises?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('Discard'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('Save'),
+              ),
+            ],
+          ),
+        );
+        
+        if (shouldSave == true) {
+          await _measurementKey.currentState?.saveSession();
+        }
+      } else {
+        // Auto-save for swipe gestures with toast
+        await _measurementKey.currentState?.saveSession();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Saved ${_selectedExercise?.name}'),
+              duration: const Duration(milliseconds: 1500),
+            ),
+          );
+        }
+      }
+    }
+    
+    setState(() {
+      _selectedExercise = newExercise;
+      _currentSide = 'L'; // Reset to left when changing exercise
+    });
+    await _exerciseService.setSelectedExercise(newExercise.id);
   }
 
   @override
@@ -175,6 +239,8 @@ class _MyHomePageState extends State<MyHomePage> {
                         });
                         _measurementKey.currentState?.updateRepThreshold(value);
                       },
+                      currentThemeMode: widget.currentThemeMode,
+                      onThemeModeChanged: widget.onThemeModeChanged,
                     ),
                   ),
                 ).then((_) => _loadExercises()); // Reload exercises when returning
@@ -222,39 +288,8 @@ class _MyHomePageState extends State<MyHomePage> {
                                   ))
                               .toList(),
                           onChanged: (ex) async {
-                            if (ex != null && ex.id != _selectedExercise?.id) {
-                              // Check if there are unsaved reps
-                              final hasUnsavedReps = _measurementKey.currentState?.hasUnsavedReps() ?? false;
-                              
-                              if (hasUnsavedReps) {
-                                final shouldSave = await showDialog<bool>(
-                                  context: context,
-                                  builder: (ctx) => AlertDialog(
-                                    title: const Text('Save session?'),
-                                    content: const Text('You have unsaved reps. Would you like to save this session before switching exercises?'),
-                                    actions: [
-                                      TextButton(
-                                        onPressed: () => Navigator.of(ctx).pop(false),
-                                        child: const Text('Discard'),
-                                      ),
-                                      TextButton(
-                                        onPressed: () => Navigator.of(ctx).pop(true),
-                                        child: const Text('Save'),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                                
-                                if (shouldSave == true) {
-                                  await _measurementKey.currentState?.saveSession();
-                                }
-                              }
-                              
-                              setState(() {
-                                _selectedExercise = ex;
-                                _currentSide = 'L'; // Reset to left when changing exercise
-                              });
-                              await _exerciseService.setSelectedExercise(ex.id);
+                            if (ex != null) {
+                              await _switchExercise(ex, showSaveDialog: true);
                             }
                           },
                         ),
@@ -286,6 +321,8 @@ class _MyHomePageState extends State<MyHomePage> {
               graphWindowSeconds: _graphWindowSeconds,
               selectedExercise: _selectedExercise,
               currentSide: _currentSide,
+              exercises: _exercises,
+              onExerciseSwitch: (exercise) => _switchExercise(exercise),
             ),
           ),
         ],
