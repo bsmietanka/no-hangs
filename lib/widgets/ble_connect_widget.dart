@@ -219,9 +219,8 @@ class _BleConnectWidgetState extends State<BleConnectWidget> {
         return;
       }
 
-      // Request battery voltage and start periodic refresh
+      // Request battery voltage once on connection
       await _protocol!.requestBatteryVoltage();
-      _startBatteryTimer();
 
       // Wait a bit for battery response
       await Future.delayed(const Duration(milliseconds: 500));
@@ -239,13 +238,6 @@ class _BleConnectWidgetState extends State<BleConnectWidget> {
       _protocol = null;
       setState(() => _connectedDevice = null);
     }
-  }
-
-  void _startBatteryTimer({Duration interval = const Duration(minutes: 5)}) {
-    _batteryTimer?.cancel();
-    _batteryTimer = Timer.periodic(interval, (_) async {
-      await _protocol?.requestBatteryVoltage();
-    });
   }
 
   void _stopBatteryTimer() {
@@ -320,47 +312,64 @@ class _BleConnectWidgetState extends State<BleConnectWidget> {
   Widget build(BuildContext context) {
     final connected = _connectedDevice != null;
 
+    // Build children list with conditional spacing (smaller gaps)
+    final children = <Widget>[];
+
+    // Tare button - leftmost (visible when connected)
+    if (connected) {
+      children.add(
+        TextButton(
+          onPressed: _sendTare,
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+          ),
+          child: const Text(
+            'Tare',
+            style: TextStyle(color: Colors.white),
+          ),
+        ),
+      );
+      // spacing between Tare and next control
+      children.add(const SizedBox(width: 6));
+    }
+
+    // Battery indicator - middle (only when available)
+    if (connected && _batteryVoltage != null) {
+      children.add(
+        Icon(
+          _getBatteryIcon(),
+          color: _getBatteryColor(),
+          size: 20,
+        ),
+      );
+      // spacing between battery and next control
+      children.add(const SizedBox(width: 6));
+    }
+
+    // Bluetooth icon - rightmost
+    children.add(
+      IconButton(
+        icon: Icon(
+          connected ? Icons.bluetooth_connected : Icons.bluetooth,
+          color: connected ? Colors.white : Colors.white70,
+        ),
+        onPressed: () async {
+          if (connected) {
+            await _disconnect(_connectedDevice!);
+          } else {
+            final device = await _showDevicePicker();
+            if (device != null) {
+              await _connectDevice(device);
+            }
+          }
+        },
+        tooltip: connected ? 'Disconnect' : 'Connect',
+      ),
+    );
+
     return Row(
       mainAxisSize: MainAxisSize.min,
-      children: [
-        // Bluetooth icon - tap to connect/disconnect
-        IconButton(
-          icon: Icon(
-            connected ? Icons.bluetooth_connected : Icons.bluetooth,
-            color: connected ? Colors.white : Colors.white70,
-          ),
-          onPressed: () async {
-            if (connected) {
-              await _disconnect(_connectedDevice!);
-            } else {
-              final device = await _showDevicePicker();
-              if (device != null) {
-                await _connectDevice(device);
-              }
-            }
-          },
-          tooltip: connected ? 'Disconnect' : 'Connect',
-        ),
-        // Battery indicator - only visible when connected and battery info available
-        if (connected && _batteryVoltage != null)
-          Icon(
-            _getBatteryIcon(),
-            color: _getBatteryColor(),
-            size: 20,
-          ),
-        // Tare button - only visible when connected
-        if (connected)
-          TextButton(
-            onPressed: _sendTare,
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-            ),
-            child: const Text(
-              'Tare',
-              style: TextStyle(color: Colors.white),
-            ),
-          ),
-      ],
+      children: children,
     );
   }
 

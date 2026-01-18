@@ -33,12 +33,28 @@ class _SettingsPageState extends State<SettingsPage> {
   int _tempGraphWindow = 10;
   double _tempRepThreshold = 1.0;
 
+  // Controller for the rep threshold text field so we can select all on focus
+  late TextEditingController _repThresholdController;
+
   @override
   void initState() {
     super.initState();
     _tempGraphWindow = widget.graphWindowSeconds;
     _tempRepThreshold = widget.repThreshold;
+    _repThresholdController = TextEditingController(text: _tempRepThreshold.toStringAsFixed(1));
     _loadExercises();
+  }
+
+  @override
+  void didUpdateWidget(covariant SettingsPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // If parent changed the threshold (e.g., Clear All Data), sync local state and controller
+    if (widget.repThreshold != oldWidget.repThreshold) {
+      setState(() {
+        _tempRepThreshold = widget.repThreshold;
+        _repThresholdController.text = _tempRepThreshold.toStringAsFixed(1);
+      });
+    }
   }
 
   Future<void> _loadExercises() async {
@@ -46,6 +62,12 @@ class _SettingsPageState extends State<SettingsPage> {
     setState(() {
       _exercises = exercises;
     });
+  }
+
+  @override
+  void dispose() {
+    _repThresholdController.dispose();
+    super.dispose();
   }
 
   @override
@@ -174,7 +196,14 @@ class _SettingsPageState extends State<SettingsPage> {
                       suffixText: 'kg',
                       border: const OutlineInputBorder(),
                     ),
-                    controller: TextEditingController(text: _tempRepThreshold.toStringAsFixed(1)),
+                    controller: _repThresholdController,
+                    // Select all text when user taps the field so they can easily replace it
+                    onTap: () {
+                      _repThresholdController.selection = TextSelection(
+                        baseOffset: 0,
+                        extentOffset: _repThresholdController.text.length,
+                      );
+                    },
                     onChanged: (value) {
                       final parsed = double.tryParse(value);
                       if (parsed != null && parsed >= 0.1 && parsed <= 50.0) {
@@ -330,6 +359,17 @@ class _SettingsPageState extends State<SettingsPage> {
                         final prefs = await SharedPreferences.getInstance();
                         await prefs.clear();
                         await _loadExercises();
+                        // Reset settings to defaults and notify parent
+                        widget.onGraphWindowChanged(10);
+                        widget.onRepThresholdChanged(1.0);
+                        widget.onThemeModeChanged(ThemeMode.system);
+                        // Sync controller with reset value
+                        if (mounted) {
+                          setState(() {
+                            _tempRepThreshold = 1.0;
+                            _repThresholdController.text = _tempRepThreshold.toStringAsFixed(1);
+                          });
+                        }
                         if (!mounted) return;
                         messenger.showSnackBar(
                           const SnackBar(

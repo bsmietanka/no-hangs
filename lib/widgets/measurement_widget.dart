@@ -50,7 +50,9 @@ class MeasurementWidget extends StatefulWidget {
 
 class MeasurementWidgetState extends State<MeasurementWidget> {
   // Data characteristic UUID (from the Python example)
-  static final Guid _dataCharUuid = Guid('7e4e1702-1ea6-40c9-9dcc-13d34ffead57');
+  static final Guid _dataCharUuid = Guid(
+    '7e4e1702-1ea6-40c9-9dcc-13d34ffead57',
+  );
   static const int _resWeightMeas = 1;
 
   final List<MeasurementSample> _buffer = [];
@@ -60,18 +62,19 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
   // Graph window duration in seconds (default will be passed from parent)
   int _graphWindowSeconds = 10;
   // Adaptive Y-axis max (kg). Start at 40kg and grow if higher values are seen.
-  
+
   // Public methods for parent widget
   bool hasUnsavedReps() {
     return _sessionService.hasUnsavedData;
   }
-  
+
   Future<void> saveSession() async {
     await _saveSession();
   }
+
   static const double _initialMaxWeight = 5.0;
   double _maxWeight = _initialMaxWeight;
-  
+
   // Repetition tracking
   late RepDetectionService _repDetector;
   final SessionService _sessionService = SessionService();
@@ -86,18 +89,18 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
   final TextEditingController _targetInputController = TextEditingController();
   final FocusNode _targetInputFocus = FocusNode();
   final DatabaseService _databaseService = DatabaseService();
-  
+
   // Public method to update rep threshold from settings
   void updateRepThreshold(double threshold) {
     setState(() {
       _repDetector.threshold = threshold;
     });
   }
-  
+
   @override
   void initState() {
     super.initState();
-    
+
     // Initialize rep detection service
     _repDetector = RepDetectionService(
       threshold: 1.0,
@@ -106,10 +109,12 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
           _sessionService.addRep(rep);
           _lastRepTime = rep.endTime;
         });
-        debugPrint('Rep completed: peak=${rep.peakWeight.toStringAsFixed(2)} kg, avg=${rep.avgWeight.toStringAsFixed(2)} kg, median=${rep.medianWeight.toStringAsFixed(2)} kg, side=${rep.side}, duration=${rep.endTime.difference(rep.startTime).inMilliseconds}ms');
+        debugPrint(
+          'Rep completed: peak=${rep.peakWeight.toStringAsFixed(2)} kg, avg=${rep.avgWeight.toStringAsFixed(2)} kg, median=${rep.medianWeight.toStringAsFixed(2)} kg, side=${rep.side}, duration=${rep.endTime.difference(rep.startTime).inMilliseconds}ms',
+        );
       },
     );
-    
+
     if (widget.device != null) {
       _sessionService.startSession();
       _loadPersonalBest();
@@ -126,7 +131,7 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
   @override
   void didUpdateWidget(covariant MeasurementWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
-    
+
     // Handle exercise changes - reset measurements without recreating widget
     if (oldWidget.selectedExercise?.id != widget.selectedExercise?.id) {
       setState(() {
@@ -137,7 +142,7 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
       });
       _loadPersonalBest();
     }
-    
+
     if (oldWidget.device?.remoteId.str != widget.device?.remoteId.str) {
       _stopSubscription();
       if (widget.device != null) {
@@ -147,13 +152,18 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
         });
         _discoverAndSubscribe();
       } else {
-        setState(() {
-          _buffer.clear();
-          _dataChar = null;
-          _maxWeight = _initialMaxWeight; // reset adaptive max on disconnect
-          _sessionService.clear();
-          _repDetector.reset();
-        });
+        // Device disconnected - check for unsaved data
+        if (_sessionService.hasUnsavedData && widget.selectedExercise != null) {
+          _handleDeviceDisconnect();
+        } else {
+          setState(() {
+            _buffer.clear();
+            _dataChar = null;
+            _maxWeight = _initialMaxWeight; // reset adaptive max on disconnect
+            _sessionService.clear();
+            _repDetector.reset();
+          });
+        }
       }
     }
 
@@ -170,6 +180,51 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
     _targetInputFocus.dispose();
     _stopSubscription();
     super.dispose();
+  }
+
+  Future<bool> _showUnsavedDataDialog() async {
+    if (!mounted) return true;
+
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Unsaved Session'),
+        content: const Text(
+          'You have unsaved reps in this session. Do you want to save before the device disconnects?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Discard'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    return result ?? false;
+  }
+
+  Future<void> _handleDeviceDisconnect() async {
+    final shouldSave = await _showUnsavedDataDialog();
+
+    if (shouldSave && widget.selectedExercise != null) {
+      await _saveSession();
+    }
+
+    if (mounted) {
+      setState(() {
+        _buffer.clear();
+        _dataChar = null;
+        _maxWeight = _initialMaxWeight;
+        _sessionService.clear();
+        _repDetector.reset();
+      });
+    }
   }
 
   Future<void> _discoverAndSubscribe() async {
@@ -221,14 +276,22 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
       return;
     }
 
-    final pb = await _databaseService.getBestRepForExercise(widget.selectedExercise!.id);
+    final pb = await _databaseService.getBestRepForExercise(
+      widget.selectedExercise!.id,
+    );
     final pbL = widget.selectedExercise!.isTwoSided
-        ? await _databaseService.getBestRepForExercise(widget.selectedExercise!.id, side: 'L')
+        ? await _databaseService.getBestRepForExercise(
+            widget.selectedExercise!.id,
+            side: 'L',
+          )
         : null;
     final pbR = widget.selectedExercise!.isTwoSided
-        ? await _databaseService.getBestRepForExercise(widget.selectedExercise!.id, side: 'R')
+        ? await _databaseService.getBestRepForExercise(
+            widget.selectedExercise!.id,
+            side: 'R',
+          )
         : null;
-    
+
     setState(() {
       _personalBest = pb;
       _personalBestL = pbL;
@@ -238,7 +301,8 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
       if (_targetIsPercentage) {
         _targetInputController.text = _targetPercentage.toStringAsFixed(0);
       } else {
-        _targetInputController.text = _targetWeight?.toStringAsFixed(1) ?? '0.0';
+        _targetInputController.text =
+            _targetWeight?.toStringAsFixed(1) ?? '0.0';
       }
     });
   }
@@ -306,7 +370,9 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
           _buffer.removeAt(0);
         }
         // Update adaptive max weight if any new sample exceeds current max
-        final double observedMax = newSamples.map((s) => s.weight).reduce((a, b) => a > b ? a : b);
+        final double observedMax = newSamples
+            .map((s) => s.weight)
+            .reduce((a, b) => a > b ? a : b);
         if (observedMax > _maxWeight) {
           _maxWeight = observedMax;
         }
@@ -314,10 +380,14 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
         if (observedMax > _sessionService.sessionMax) {
           _sessionService.updateSessionMax(observedMax);
         }
-        
+
         // Rep detection: process each new sample
         for (final sample in newSamples) {
-          _repDetector.processSample(sample.weight, sample.receivedAt, widget.currentSide);
+          _repDetector.processSample(
+            sample.weight,
+            sample.receivedAt,
+            widget.currentSide,
+          );
         }
       });
     } catch (e, st) {
@@ -346,16 +416,18 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
     }
 
     final success = await _sessionService.saveSession(widget.selectedExercise!);
-    
+
     if (mounted) {
       if (success) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Session saved: ${_sessionService.repCount} reps')),
+          SnackBar(
+            content: Text('Session saved: ${_sessionService.repCount} reps'),
+          ),
         );
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Error saving session')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Error saving session')));
       }
     }
   }
@@ -363,6 +435,7 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
   String _formatSessionTime() {
     return _sessionService.formatSessionTime();
   }
+
   String _formatTimeSinceLastRep() {
     if (_lastRepTime == null) return '-';
     final elapsed = DateTime.now().difference(_lastRepTime!);
@@ -381,13 +454,7 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 10,
-            color: appColors.statLabel,
-          ),
-        ),
+        Text(label, style: TextStyle(fontSize: 10, color: appColors.statLabel)),
         const SizedBox(height: 2),
         Text(
           value,
@@ -405,19 +472,21 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
     final velocity = details.primaryVelocity ?? 0;
     if (velocity.abs() < 500) return; // Require minimum swipe speed
     if (widget.exercises.isEmpty || widget.selectedExercise == null) return;
-    
-    final currentIndex = widget.exercises.indexWhere((e) => e.id == widget.selectedExercise!.id);
+
+    final currentIndex = widget.exercises.indexWhere(
+      (e) => e.id == widget.selectedExercise!.id,
+    );
     if (currentIndex == -1) return;
-    
-    final newIndex = velocity > 0 
+
+    final newIndex = velocity > 0
         ? (currentIndex - 1 + widget.exercises.length) % widget.exercises.length
         : (currentIndex + 1) % widget.exercises.length;
-    
+
     final newExercise = widget.exercises[newIndex];
-    
+
     // Haptic feedback
     HapticFeedback.lightImpact();
-    
+
     // Notify parent to switch exercise
     widget.onExerciseSwitch?.call(newExercise);
   }
@@ -431,366 +500,570 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
       behavior: HitTestBehavior.opaque,
       child: Column(
         children: [
-        Expanded(
-          child: Container(
-            color: Theme.of(context).scaffoldBackgroundColor,
-            padding: const EdgeInsets.all(16.0),
-            child: _buildChart(),
+          Expanded(
+            child: Container(
+              color: Theme.of(context).scaffoldBackgroundColor,
+              padding: const EdgeInsets.all(16.0),
+              child: _buildChart(),
+            ),
           ),
-        ),
-        // Controls and displays area below the graph
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surface,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withAlpha((0.1 * 255).round()),
-                blurRadius: 8,
-                offset: const Offset(0, -2),
-              ),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Last rep details (if available)
-              if (_sessionService.hasUnsavedData) ...[
-                Text(
-                  'Last Rep',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: appColors.statLabel,
-                    fontWeight: FontWeight.bold,
-                  ),
+          // Controls and displays area below the graph
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surface,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withAlpha((0.1 * 255).round()),
+                  blurRadius: 8,
+                  offset: const Offset(0, -2),
                 ),
-                const SizedBox(height: 4),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Current rep in progress (if active)
+                if (_repDetector.isInRep) ...[
+                  Text(
+                    'Current Rep (In Progress)',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: appColors.statLabel,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      _buildStatDisplay(
+                        'Duration',
+                        '${(_repDetector.currentRepDuration.inMilliseconds / 1000).toStringAsFixed(1)}s',
+                        appColors.statLastRepDuration,
+                      ),
+                      _buildStatDisplay(
+                        'Max',
+                        '${_repDetector.currentRepPeak.toStringAsFixed(1)} kg',
+                        appColors.statLastRepMax,
+                      ),
+                      _buildStatDisplay(
+                        'Average',
+                        '${_repDetector.currentRepAverage.toStringAsFixed(1)} kg',
+                        appColors.statLastRepAverage,
+                      ),
+                      _buildStatDisplay(
+                        'Median',
+                        '${_repDetector.currentRepMedian.toStringAsFixed(1)} kg',
+                        appColors.statLastRepMedian,
+                      ),
+                    ],
+                  ),
+                  const Divider(height: 16),
+                ]
+                // Last rep details (if available and not currently in a rep)
+                else if (_sessionService.hasUnsavedData) ...[
+                  Text(
+                    'Last Rep',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: appColors.statLabel,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      _buildStatDisplay(
+                        'Duration',
+                        '${(_sessionService.lastRep!.duration.inMilliseconds / 1000).toStringAsFixed(1)}s',
+                        appColors.statLastRepDuration,
+                      ),
+                      _buildStatDisplay(
+                        'Max',
+                        '${_sessionService.lastRep!.peakWeight.toStringAsFixed(1)} kg',
+                        appColors.statLastRepMax,
+                      ),
+                      _buildStatDisplay(
+                        'Average',
+                        '${_sessionService.lastRep!.avgWeight.toStringAsFixed(1)} kg',
+                        appColors.statLastRepAverage,
+                      ),
+                      _buildStatDisplay(
+                        'Median',
+                        '${_sessionService.lastRep!.medianWeight.toStringAsFixed(1)} kg',
+                        appColors.statLastRepMedian,
+                      ),
+                    ],
+                  ),
+                  const Divider(height: 16),
+                ],
+                // Session stats row
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
-                    _buildStatDisplay('Duration', '${(_sessionService.lastRep!.duration.inMilliseconds / 1000).toStringAsFixed(1)}s', appColors.statLastRepDuration),
-                    _buildStatDisplay('Max', '${_sessionService.lastRep!.peakWeight.toStringAsFixed(1)} kg', appColors.statLastRepMax),
-                    _buildStatDisplay('Average', '${_sessionService.lastRep!.avgWeight.toStringAsFixed(1)} kg', appColors.statLastRepAverage),
-                    _buildStatDisplay('Median', '${_sessionService.lastRep!.medianWeight.toStringAsFixed(1)} kg', appColors.statLastRepMedian),
+                    _buildStatDisplay(
+                      'Session Max',
+                      '${_sessionService.sessionMax.toStringAsFixed(1)} kg',
+                      appColors.statSessionMax,
+                    ),
+                    if (widget.selectedExercise?.isTwoSided == true) ...[
+                      _buildStatDisplay(
+                        'PB L',
+                        '${_personalBestL?.toStringAsFixed(1) ?? '-'} kg',
+                        appColors.statPersonalBest,
+                      ),
+                      _buildStatDisplay(
+                        'PB R',
+                        '${_personalBestR?.toStringAsFixed(1) ?? '-'} kg',
+                        appColors.statPersonalBest,
+                      ),
+                    ] else
+                      _buildStatDisplay(
+                        'PB',
+                        '${_personalBest?.toStringAsFixed(1) ?? '-'} kg',
+                        appColors.statPersonalBest,
+                      ),
+                    _buildStatDisplay(
+                      'Session Time',
+                      _formatSessionTime(),
+                      appColors.statSessionTime,
+                    ),
+                  ],
+                ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    if (widget.selectedExercise?.isTwoSided == true) ...[
+                      _buildStatDisplay(
+                        'L Reps',
+                        '${_sessionService.getRepsForSide('L').length}',
+                        appColors.statRepCount,
+                      ),
+                      _buildStatDisplay(
+                        'R Reps',
+                        '${_sessionService.getRepsForSide('R').length}',
+                        appColors.statRepCount,
+                      ),
+                    ] else
+                      _buildStatDisplay(
+                        'Reps',
+                        '${_sessionService.repCount}',
+                        appColors.statRepCount,
+                      ),
+                    if (_lastRepTime != null)
+                      _buildStatDisplay(
+                        'Since Last',
+                        _formatTimeSinceLastRep(),
+                        appColors.statRepCount,
+                      ),
                   ],
                 ),
                 const Divider(height: 16),
-              ],
-              // Session stats row
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: [
-                  _buildStatDisplay('Session Max', '${_sessionService.sessionMax.toStringAsFixed(1)} kg', appColors.statSessionMax),
-                  if (widget.selectedExercise?.isTwoSided == true) ...[
-                    _buildStatDisplay('PB L', '${_personalBestL?.toStringAsFixed(1) ?? '-'} kg', appColors.statPersonalBest),
-                    _buildStatDisplay('PB R', '${_personalBestR?.toStringAsFixed(1) ?? '-'} kg', appColors.statPersonalBest),
-                  ] else
-                    _buildStatDisplay('PB', '${_personalBest?.toStringAsFixed(1) ?? '-'} kg', appColors.statPersonalBest),
-                  _buildStatDisplay('Session Time', _formatSessionTime(), appColors.statSessionTime),
-                ],
-              ),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: [
-                  if (widget.selectedExercise?.isTwoSided == true) ...[
-                    _buildStatDisplay('L Reps', '${_sessionService.getRepsForSide('L').length}', appColors.statRepCount),
-                    _buildStatDisplay('R Reps', '${_sessionService.getRepsForSide('R').length}', appColors.statRepCount),
-                  ] else
-                    _buildStatDisplay('Reps', '${_sessionService.repCount}', appColors.statRepCount),
-                  if (_lastRepTime != null)
-                    _buildStatDisplay('Since Last', _formatTimeSinceLastRep(), appColors.statRepCount),
-                ],
-              ),
-              const Divider(height: 16),
-              // Target settings
-              Row(
-                children: [
-                  const Text('Target:', style: TextStyle(fontWeight: FontWeight.bold)),
-                  const SizedBox(width: 8),
-                      // Compact toggle between % and kg mode
-                      ToggleButtons(
-                        isSelected: [_targetIsPercentage, !_targetIsPercentage],
-                        onPressed: _personalBest == null ? null : (index) {
-                          setState(() {
-                            _targetIsPercentage = index == 0;
-                            if (_targetIsPercentage) {
-                              // Switching to % mode - calculate percentage from current kg value
-                              if (_targetWeight != null && _personalBest != null && _personalBest! > 0) {
-                                _targetPercentage = (_targetWeight! / _personalBest! * 100).clamp(0, 100);
-                              }
-                              _updateTargetWeight();
-                              // Update controller to show percentage
-                              _targetInputController.text = _targetPercentage.toStringAsFixed(0);
-                            } else {
-                              // Switching to kg mode - update controller to show kg value
-                              _targetInputController.text = _targetWeight?.toStringAsFixed(1) ?? '0.0';
-                            }
-                          });
-                        },
-                        constraints: const BoxConstraints(minWidth: 36, minHeight: 30),
-                        borderRadius: const BorderRadius.all(Radius.circular(6)),
-                        color: appColors.targetButtonText,
-                        selectedColor: appColors.targetButtonTextSelected,
-                        fillColor: appColors.targetButtonFill,
-                        borderColor: appColors.targetButtonBorder,
-                        selectedBorderColor: appColors.targetButtonBorderSelected,
-                        borderWidth: 1,
-                        children: const [
-                          Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                            child: Text('%'),
-                          ),
-                          Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                            child: Text('kg'),
-                          ),
-                        ],
+                // Target settings
+                Row(
+                  children: [
+                    const Text(
+                      'Target:',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(width: 8),
+                    // Compact toggle between % and kg mode
+                    ToggleButtons(
+                      isSelected: [_targetIsPercentage, !_targetIsPercentage],
+                      onPressed: _personalBest == null
+                          ? null
+                          : (index) {
+                              setState(() {
+                                _targetIsPercentage = index == 0;
+                                if (_targetIsPercentage) {
+                                  // Switching to % mode - calculate percentage from current kg value
+                                  if (_targetWeight != null &&
+                                      _personalBest != null &&
+                                      _personalBest! > 0) {
+                                    _targetPercentage =
+                                        (_targetWeight! / _personalBest! * 100)
+                                            .clamp(0, 100);
+                                  }
+                                  _updateTargetWeight();
+                                  // Update controller to show percentage
+                                  _targetInputController.text =
+                                      _targetPercentage.toStringAsFixed(0);
+                                } else {
+                                  // Switching to kg mode - update controller to show kg value
+                                  _targetInputController.text =
+                                      _targetWeight?.toStringAsFixed(1) ??
+                                      '0.0';
+                                }
+                              });
+                            },
+                      constraints: const BoxConstraints(
+                        minWidth: 36,
+                        minHeight: 30,
                       ),
-                      const SizedBox(width: 4),
-                      // Stepper controls
-                      if (_targetIsPercentage) ...[
-                        IconButton(
-                          icon: const Icon(Icons.remove_circle_outline, size: 20),
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                          onPressed: _personalBest == null || _targetPercentage <= 0 ? null : () {
-                            setState(() {
-                              _targetPercentage = math.max(0, _targetPercentage - 5);
-                              _updateTargetWeight();
-                              _targetInputController.text = _targetPercentage.toStringAsFixed(0);
-                            });
-                          },
-                        ),
-                        SizedBox(
-                          width: 70,
-                          child: TextField(
-                            controller: _targetInputController,
-                            focusNode: _targetInputFocus,
-                            enabled: _personalBest != null,
-                            textAlign: TextAlign.center,
-                            keyboardType: TextInputType.number,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14,
-                            ),
-                            decoration: InputDecoration(
-                              filled: true,
-                              fillColor: appColors.targetInputBackground,
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(6),
-                                borderSide: BorderSide(color: appColors.targetInputBorder, width: 1),
-                              ),
-                              enabledBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(6),
-                                borderSide: BorderSide(color: appColors.targetInputBorder, width: 1),
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(6),
-                                borderSide: BorderSide(color: appColors.targetInputBorderFocused, width: 2),
-                              ),
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                              suffix: Text(
-                                '%',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 14,
-                                  color: appColors.targetInputText,
-                                ),
-                              ),
-                            ),
-                            onTap: () {
-                              // Select all text on tap for easy replacement
-                              _targetInputController.selection = TextSelection(
-                                baseOffset: 0,
-                                extentOffset: _targetInputController.text.length,
-                              );
-                            },
-                            onSubmitted: (value) {
-                              final input = double.tryParse(value);
-                              setState(() {
-                                if (input != null) {
-                                  _targetPercentage = input.clamp(0, 100);
-                                  _updateTargetWeight();
-                                }
-                                _targetInputController.text = _targetPercentage.toStringAsFixed(0);
-                              });
-                              _targetInputFocus.unfocus();
-                            },
-                            onEditingComplete: () {
-                              final input = double.tryParse(_targetInputController.text);
-                              setState(() {
-                                if (input != null) {
-                                  _targetPercentage = input.clamp(0, 100);
-                                  _updateTargetWeight();
-                                }
-                                _targetInputController.text = _targetPercentage.toStringAsFixed(0);
-                              });
-                              _targetInputFocus.unfocus();
-                            },
+                      borderRadius: const BorderRadius.all(Radius.circular(6)),
+                      color: appColors.targetButtonText,
+                      selectedColor: appColors.targetButtonTextSelected,
+                      fillColor: appColors.targetButtonFill,
+                      borderColor: appColors.targetButtonBorder,
+                      selectedBorderColor: appColors.targetButtonBorderSelected,
+                      borderWidth: 1,
+                      children: const [
+                        Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 4,
                           ),
+                          child: Text('%'),
                         ),
-                        IconButton(
-                          icon: const Icon(Icons.add_circle_outline, size: 20),
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                          onPressed: _personalBest == null || _targetPercentage >= 100 ? null : () {
-                            setState(() {
-                              _targetPercentage = (_targetPercentage + 5).clamp(50, 100);
-                              _updateTargetWeight();
-                              _targetInputController.text = _targetPercentage.toStringAsFixed(0);
-                            });
-                          },
-                        ),
-                      ] else ...[
-                        IconButton(
-                          icon: const Icon(Icons.remove_circle_outline, size: 20),
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                          onPressed: _personalBest == null || (_targetWeight ?? 0) <= 0 ? null : () {
-                            setState(() {
-                              _targetWeight = math.max(0, (_targetWeight ?? 0) - 1.0);
-                              _targetInputController.text = _targetWeight?.toStringAsFixed(1) ?? '0.0';
-                            });
-                          },
-                        ),
-                        SizedBox(
-                          width: 85,
-                          child: TextField(
-                            controller: _targetInputController,
-                            focusNode: _targetInputFocus,
-                            enabled: _personalBest != null,
-                            textAlign: TextAlign.center,
-                            keyboardType: TextInputType.number,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14,
-                            ),
-                            decoration: InputDecoration(
-                              filled: true,
-                              fillColor: appColors.targetInputBackground,
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(6),
-                                borderSide: BorderSide(color: appColors.targetInputBorder, width: 1),
-                              ),
-                              enabledBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(6),
-                                borderSide: BorderSide(color: appColors.targetInputBorder, width: 1),
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(6),
-                                borderSide: BorderSide(color: appColors.targetInputBorderFocused, width: 2),
-                              ),
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                              suffix: Text(
-                                'kg',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 14,
-                                  color: appColors.targetInputText,
-                                ),
-                              ),
-                            ),
-                            onTap: () {
-                              // Select all text on tap for easy replacement
-                              _targetInputController.selection = TextSelection(
-                                baseOffset: 0,
-                                extentOffset: _targetInputController.text.length,
-                              );
-                            },
-                            onSubmitted: (value) {
-                              final input = double.tryParse(value);
-                              setState(() {
-                                if (input != null && _personalBest != null) {
-                                  _targetWeight = input.clamp(0, _personalBest!);
-                                }
-                                _targetInputController.text = _targetWeight?.toStringAsFixed(1) ?? '0.0';
-                              });
-                              _targetInputFocus.unfocus();
-                            },
-                            onEditingComplete: () {
-                              final input = double.tryParse(_targetInputController.text);
-                              setState(() {
-                                if (input != null && _personalBest != null) {
-                                  _targetWeight = input.clamp(0, _personalBest!);
-                                }
-                                _targetInputController.text = _targetWeight?.toStringAsFixed(1) ?? '0.0';
-                              });
-                              _targetInputFocus.unfocus();
-                            },
+                        Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 4,
                           ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.add_circle_outline, size: 20),
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                          onPressed: _personalBest == null || (_targetWeight ?? 0) >= (_personalBest ?? 0) ? null : () {
-                            setState(() {
-                              _targetWeight = math.min(_personalBest ?? double.infinity, (_targetWeight ?? 0) + 1.0);
-                              _targetInputController.text = _targetWeight?.toStringAsFixed(1) ?? '0.0';
-                            });
-                          },
+                          child: Text('kg'),
                         ),
                       ],
-                ],
-              ),
-              const Divider(height: 16),
-              // Action buttons
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  ElevatedButton.icon(
-                    onPressed: () {
-                      setState(() {
-                        _sessionService.reset();
-                        _repDetector.reset();
-                      });
-                    },
-                    icon: const Icon(Icons.refresh),
-                    label: const Text('Reset'),
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                     ),
-                  ),
-                  ElevatedButton.icon(
-                    onPressed: !_sessionService.hasUnsavedData ? null : _saveSession,
-                    icon: const Icon(Icons.save),
-                    label: const Text('Save Session'),
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                    const SizedBox(width: 4),
+                    // Stepper controls
+                    if (_targetIsPercentage) ...[
+                      IconButton(
+                        icon: const Icon(Icons.remove_circle_outline, size: 20),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(
+                          minWidth: 32,
+                          minHeight: 32,
+                        ),
+                        onPressed:
+                            _personalBest == null || _targetPercentage <= 0
+                            ? null
+                            : () {
+                                setState(() {
+                                  _targetPercentage = math.max(
+                                    0,
+                                    _targetPercentage - 5,
+                                  );
+                                  _updateTargetWeight();
+                                  _targetInputController.text =
+                                      _targetPercentage.toStringAsFixed(0);
+                                });
+                              },
+                      ),
+                      SizedBox(
+                        width: 70,
+                        child: TextField(
+                          controller: _targetInputController,
+                          focusNode: _targetInputFocus,
+                          enabled: _personalBest != null,
+                          textAlign: TextAlign.center,
+                          keyboardType: TextInputType.number,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                          decoration: InputDecoration(
+                            filled: true,
+                            fillColor: appColors.targetInputBackground,
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(6),
+                              borderSide: BorderSide(
+                                color: appColors.targetInputBorder,
+                                width: 1,
+                              ),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(6),
+                              borderSide: BorderSide(
+                                color: appColors.targetInputBorder,
+                                width: 1,
+                              ),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(6),
+                              borderSide: BorderSide(
+                                color: appColors.targetInputBorderFocused,
+                                width: 2,
+                              ),
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 10,
+                            ),
+                            suffix: Text(
+                              '%',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                                color: appColors.targetInputText,
+                              ),
+                            ),
+                          ),
+                          onTap: () {
+                            // Select all text on tap for easy replacement
+                            _targetInputController.selection = TextSelection(
+                              baseOffset: 0,
+                              extentOffset: _targetInputController.text.length,
+                            );
+                          },
+                          onSubmitted: (value) {
+                            final input = double.tryParse(value);
+                            setState(() {
+                              if (input != null) {
+                                _targetPercentage = input.clamp(0, 100);
+                                _updateTargetWeight();
+                              }
+                              _targetInputController.text = _targetPercentage
+                                  .toStringAsFixed(0);
+                            });
+                            _targetInputFocus.unfocus();
+                          },
+                          onEditingComplete: () {
+                            final input = double.tryParse(
+                              _targetInputController.text,
+                            );
+                            setState(() {
+                              if (input != null) {
+                                _targetPercentage = input.clamp(0, 100);
+                                _updateTargetWeight();
+                              }
+                              _targetInputController.text = _targetPercentage
+                                  .toStringAsFixed(0);
+                            });
+                            _targetInputFocus.unfocus();
+                          },
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.add_circle_outline, size: 20),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(
+                          minWidth: 32,
+                          minHeight: 32,
+                        ),
+                        onPressed:
+                            _personalBest == null || _targetPercentage >= 100
+                            ? null
+                            : () {
+                                setState(() {
+                                  _targetPercentage = (_targetPercentage + 5)
+                                      .clamp(50, 100);
+                                  _updateTargetWeight();
+                                  _targetInputController.text =
+                                      _targetPercentage.toStringAsFixed(0);
+                                });
+                              },
+                      ),
+                    ] else ...[
+                      IconButton(
+                        icon: const Icon(Icons.remove_circle_outline, size: 20),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(
+                          minWidth: 32,
+                          minHeight: 32,
+                        ),
+                        onPressed:
+                            _personalBest == null || (_targetWeight ?? 0) <= 0
+                            ? null
+                            : () {
+                                setState(() {
+                                  _targetWeight = math.max(
+                                    0,
+                                    (_targetWeight ?? 0) - 1.0,
+                                  );
+                                  _targetInputController.text =
+                                      _targetWeight?.toStringAsFixed(1) ??
+                                      '0.0';
+                                });
+                              },
+                      ),
+                      SizedBox(
+                        width: 85,
+                        child: TextField(
+                          controller: _targetInputController,
+                          focusNode: _targetInputFocus,
+                          enabled: _personalBest != null,
+                          textAlign: TextAlign.center,
+                          keyboardType: TextInputType.number,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                          decoration: InputDecoration(
+                            filled: true,
+                            fillColor: appColors.targetInputBackground,
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(6),
+                              borderSide: BorderSide(
+                                color: appColors.targetInputBorder,
+                                width: 1,
+                              ),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(6),
+                              borderSide: BorderSide(
+                                color: appColors.targetInputBorder,
+                                width: 1,
+                              ),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(6),
+                              borderSide: BorderSide(
+                                color: appColors.targetInputBorderFocused,
+                                width: 2,
+                              ),
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 10,
+                            ),
+                            suffix: Text(
+                              'kg',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                                color: appColors.targetInputText,
+                              ),
+                            ),
+                          ),
+                          onTap: () {
+                            // Select all text on tap for easy replacement
+                            _targetInputController.selection = TextSelection(
+                              baseOffset: 0,
+                              extentOffset: _targetInputController.text.length,
+                            );
+                          },
+                          onSubmitted: (value) {
+                            final input = double.tryParse(value);
+                            setState(() {
+                              if (input != null && _personalBest != null) {
+                                _targetWeight = input.clamp(0, _personalBest!);
+                              }
+                              _targetInputController.text =
+                                  _targetWeight?.toStringAsFixed(1) ?? '0.0';
+                            });
+                            _targetInputFocus.unfocus();
+                          },
+                          onEditingComplete: () {
+                            final input = double.tryParse(
+                              _targetInputController.text,
+                            );
+                            setState(() {
+                              if (input != null && _personalBest != null) {
+                                _targetWeight = input.clamp(0, _personalBest!);
+                              }
+                              _targetInputController.text =
+                                  _targetWeight?.toStringAsFixed(1) ?? '0.0';
+                            });
+                            _targetInputFocus.unfocus();
+                          },
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.add_circle_outline, size: 20),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(
+                          minWidth: 32,
+                          minHeight: 32,
+                        ),
+                        onPressed:
+                            _personalBest == null ||
+                                (_targetWeight ?? 0) >= (_personalBest ?? 0)
+                            ? null
+                            : () {
+                                setState(() {
+                                  _targetWeight = math.min(
+                                    _personalBest ?? double.infinity,
+                                    (_targetWeight ?? 0) + 1.0,
+                                  );
+                                  _targetInputController.text =
+                                      _targetWeight?.toStringAsFixed(1) ??
+                                      '0.0';
+                                });
+                              },
+                      ),
+                    ],
+                  ],
+                ),
+                const Divider(height: 16),
+                // Action buttons
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    ElevatedButton.icon(
+                      onPressed: () {
+                        setState(() {
+                          _sessionService.reset();
+                          _repDetector.reset();
+                        });
+                      },
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Reset'),
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 10,
+                        ),
+                      ),
                     ),
-                  ),
-                ],
-              ),
-            ],
+                    ElevatedButton.icon(
+                      onPressed: !_sessionService.hasUnsavedData
+                          ? null
+                          : _saveSession,
+                      icon: const Icon(Icons.save),
+                      label: const Text('Save Session'),
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 10,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
-        ),
-      ],
+        ],
       ),
     );
   }
 
   Widget _buildChart() {
     final appColors = Theme.of(context).extension<AppColors>()!;
-    if (_buffer.isEmpty) return const SizedBox.shrink(); 
+    if (_buffer.isEmpty) return const SizedBox.shrink();
 
     final now = DateTime.now();
     final windowStart = now.subtract(Duration(seconds: _graphWindowSeconds));
-    final samples = _buffer.where((s) => s.receivedAt.isAfter(windowStart)).toList();
+    final samples = _buffer
+        .where((s) => s.receivedAt.isAfter(windowStart))
+        .toList();
     if (samples.isEmpty) return const SizedBox.shrink();
 
     // X axis: seconds since windowStart
-    final xs = samples.map((s) => s.receivedAt.difference(windowStart).inMilliseconds / 1000.0).toList();
-    final ys = samples.map((s) => s.weight).toList();
+    final xs = samples
+        .map(
+          (s) => s.receivedAt.difference(windowStart).inMilliseconds / 1000.0,
+        )
+        .toList();
 
-    final spots = List<FlSpot>.generate(samples.length, (i) => FlSpot(xs[i], ys[i]));
+    // Clamp weights to >= 0 so the chart doesn't show negative values
+    final clampedYs = samples.map((s) => math.max(0.0, s.weight)).toList();
+
+    final spots = List<FlSpot>.generate(
+      samples.length,
+      (i) => FlSpot(xs[i], clampedYs[i]),
+    );
 
     final minX = 0.0;
     final maxX = _graphWindowSeconds.toDouble();
     final minY = 0.0;
     // Use PB if available, otherwise adaptive max (start 40kg)
-    final dataMax = math.max(_maxWeight, _initialMaxWeight);
-    final effectiveMax = _personalBest != null 
+    // Ensure we consider only non-negative values for max calculation
+    final dataMax = math.max(math.max(_maxWeight, _initialMaxWeight), 0.0);
+    final effectiveMax = _personalBest != null
         ? math.max(_personalBest!, dataMax)
         : dataMax;
     final maxY = (effectiveMax <= minY) ? (minY + 1.0) : effectiveMax;

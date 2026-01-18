@@ -7,7 +7,9 @@ import 'services/exercise_service.dart';
 import 'services/theme_service.dart';
 import 'theme/app_theme.dart';
 import 'pages/settings_page.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'pages/history_page.dart';
+import 'pages/sessions_page.dart';
 
 void main() {
   runApp(const MyApp());
@@ -77,77 +79,97 @@ class _MyHomePageState extends State<MyHomePage> {
   // Minimal home page: show BLE connection widget
   BluetoothDevice? _connectedDevice;
   final ValueNotifier<bool> _lastCmdAck = ValueNotifier(false);
+  static const String _graphWindowKey = 'graph_window_seconds';
+  static const String _repThresholdKey = 'rep_threshold';
+
   int _graphWindowSeconds = 10;
   double _repThreshold = 1.0;
-  
+
   final ExerciseService _exerciseService = ExerciseService();
   List<Exercise> _exercises = [];
   Exercise? _selectedExercise;
   String _currentSide = 'L'; // 'L' or 'R' for two-sided exercises
   final GlobalKey<MeasurementWidgetState> _measurementKey = GlobalKey();
-  
+
   @override
   void initState() {
     super.initState();
     _loadExercises();
+    _loadSettings();
   }
-  
+
+  Future<void> _loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    final gw = prefs.getInt(_graphWindowKey) ?? _graphWindowSeconds;
+    final rt = prefs.getDouble(_repThresholdKey) ?? _repThreshold;
+    setState(() {
+      _graphWindowSeconds = gw;
+      _repThreshold = rt;
+    });
+    // propagate threshold to measurement widget
+    _measurementKey.currentState?.updateRepThreshold(_repThreshold);
+  }
+
+  Future<void> _saveGraphWindow(int seconds) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_graphWindowKey, seconds);
+  }
+
+  Future<void> _saveRepThreshold(double threshold) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_repThresholdKey, threshold);
+  }
+
   Future<void> _loadExercises() async {
     final exercises = await _exerciseService.getExercises();
     final selected = await _exerciseService.getSelectedExercise();
     setState(() {
       _exercises = exercises;
-      _selectedExercise = selected ?? (exercises.isNotEmpty ? exercises.first : null);
+      _selectedExercise =
+          selected ?? (exercises.isNotEmpty ? exercises.first : null);
     });
     if (_selectedExercise != null) {
       await _exerciseService.setSelectedExercise(_selectedExercise!.id);
     }
   }
 
-  Future<void> _switchExercise(Exercise newExercise, {bool showSaveDialog = false}) async {
+  Future<void> _switchExercise(
+    Exercise newExercise, {
+    bool showSaveDialog = false,
+  }) async {
     if (newExercise.id == _selectedExercise?.id) return;
-    
+
     // Check for unsaved data
-    final hasUnsavedReps = _measurementKey.currentState?.hasUnsavedReps() ?? false;
-    
+    final hasUnsavedReps =
+        _measurementKey.currentState?.hasUnsavedReps() ?? false;
+
     if (hasUnsavedReps) {
-      if (showSaveDialog) {
-        // Show dialog for deliberate dropdown changes
-        final shouldSave = await showDialog<bool>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            title: const Text('Save session?'),
-            content: const Text('You have unsaved reps. Would you like to save this session before switching exercises?'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(false),
-                child: const Text('Discard'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(true),
-                child: const Text('Save'),
-              ),
-            ],
+      // Always show dialog when there are unsaved reps (both dropdown and swipe)
+      final shouldSave = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Save session?'),
+          content: const Text(
+            'You have unsaved reps. Would you like to save this session before switching exercises?',
           ),
-        );
-        
-        if (shouldSave == true) {
-          await _measurementKey.currentState?.saveSession();
-        }
-      } else {
-        // Auto-save for swipe gestures with toast
-        await _measurementKey.currentState?.saveSession();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Saved ${_selectedExercise?.name}'),
-              duration: const Duration(milliseconds: 1500),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Discard'),
             ),
-          );
-        }
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      );
+
+      if (shouldSave == true) {
+        await _measurementKey.currentState?.saveSession();
       }
     }
-    
+
     setState(() {
       _selectedExercise = newExercise;
       _currentSide = 'L'; // Reset to left when changing exercise
@@ -190,10 +212,7 @@ class _MyHomePageState extends State<MyHomePage> {
                   SizedBox(height: 8),
                   Text(
                     'No Hangs',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
                   ),
                 ],
               ),
@@ -212,9 +231,17 @@ class _MyHomePageState extends State<MyHomePage> {
               onTap: () {
                 Navigator.of(context).pop();
                 Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (ctx) => const HistoryPage(),
-                  ),
+                  MaterialPageRoute(builder: (ctx) => const HistoryPage()),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.list_alt),
+              title: const Text('Sessions'),
+              onTap: () {
+                Navigator.of(context).pop();
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (ctx) => const SessionsPage()),
                 );
               },
             ),
@@ -223,27 +250,35 @@ class _MyHomePageState extends State<MyHomePage> {
               title: const Text('Settings'),
               onTap: () {
                 Navigator.of(context).pop();
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (ctx) => SettingsPage(
-                      graphWindowSeconds: _graphWindowSeconds,
-                      onGraphWindowChanged: (value) {
-                        setState(() {
-                          _graphWindowSeconds = value;
-                        });
-                      },
-                      repThreshold: _repThreshold,
-                      onRepThresholdChanged: (value) {
-                        setState(() {
-                          _repThreshold = value;
-                        });
-                        _measurementKey.currentState?.updateRepThreshold(value);
-                      },
-                      currentThemeMode: widget.currentThemeMode,
-                      onThemeModeChanged: widget.onThemeModeChanged,
-                    ),
-                  ),
-                ).then((_) => _loadExercises()); // Reload exercises when returning
+                Navigator.of(context)
+                    .push(
+                      MaterialPageRoute(
+                        builder: (ctx) => SettingsPage(
+                          graphWindowSeconds: _graphWindowSeconds,
+                          onGraphWindowChanged: (value) {
+                            setState(() {
+                              _graphWindowSeconds = value;
+                            });
+                            _saveGraphWindow(value);
+                          },
+                          repThreshold: _repThreshold,
+                          onRepThresholdChanged: (value) {
+                            setState(() {
+                              _repThreshold = value;
+                            });
+                            _measurementKey.currentState?.updateRepThreshold(
+                              value,
+                            );
+                            _saveRepThreshold(value);
+                          },
+                          currentThemeMode: widget.currentThemeMode,
+                          onThemeModeChanged: widget.onThemeModeChanged,
+                        ),
+                      ),
+                    )
+                    .then(
+                      (_) => _loadExercises(),
+                    ); // Reload exercises when returning
               },
             ),
           ],
@@ -269,10 +304,7 @@ class _MyHomePageState extends State<MyHomePage> {
               children: [
                 const Text(
                   'Exercise:',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(width: 16),
                 Expanded(
@@ -282,10 +314,12 @@ class _MyHomePageState extends State<MyHomePage> {
                           value: _selectedExercise,
                           isExpanded: true,
                           items: _exercises
-                              .map((ex) => DropdownMenuItem(
-                                    value: ex,
-                                    child: Text(ex.name),
-                                  ))
+                              .map(
+                                (ex) => DropdownMenuItem(
+                                  value: ex,
+                                  child: Text(ex.name),
+                                ),
+                              )
                               .toList(),
                           onChanged: (ex) async {
                             if (ex != null) {
@@ -305,9 +339,7 @@ class _MyHomePageState extends State<MyHomePage> {
                     onSelectionChanged: (Set<String> selected) {
                       setState(() => _currentSide = selected.first);
                     },
-                    style: ButtonStyle(
-                      visualDensity: VisualDensity.compact,
-                    ),
+                    style: ButtonStyle(visualDensity: VisualDensity.compact),
                   ),
                 ],
               ],
@@ -327,7 +359,6 @@ class _MyHomePageState extends State<MyHomePage> {
           ),
         ],
       ),
-
     );
   }
 }
