@@ -3,6 +3,9 @@ import '../models/session.dart';
 import '../models/rep.dart';
 import '../services/database_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/stat_display.dart';
+import '../utils/snackbar_helper.dart';
+import '../utils/dialog_helper.dart';
 
 class SessionDetailPage extends StatefulWidget {
   final Session session;
@@ -34,10 +37,11 @@ class _SessionDetailPageState extends State<SessionDetailPage> {
     });
   }
 
-  Future<void> _deleteRep(int index) async {
-    if (_reps.isEmpty || index >= _reps.length) return;
+  /// Helper method to get rep ID from database by index
+  /// Eliminates code duplication across _deleteRep, _changeSide, and _cloneRep
+  Future<int?> _getRepIdByIndex(int index) async {
+    if (index < 0 || index >= _reps.length) return null;
 
-    // Get rep ID from database by querying with the session_id and using index
     final db = await _dbService.database;
     final result = await db.query(
       'session_reps',
@@ -46,16 +50,24 @@ class _SessionDetailPageState extends State<SessionDetailPage> {
       orderBy: 'rep_start_time ASC',
     );
 
-    if (index < result.length) {
-      final repId = result[index]['id'] as int;
-      await _dbService.deleteRep(repId);
-      await _loadReps();
+    if (index >= result.length) return null;
+    return result[index]['id'] as int;
+  }
 
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Rep deleted')));
-      }
+  Future<void> _deleteRep(int index) async {
+    if (_reps.isEmpty || index >= _reps.length) return;
+
+    final repId = await _getRepIdByIndex(index);
+    if (repId == null) {
+      if (mounted) context.showError('Rep not found');
+      return;
+    }
+
+    await _dbService.deleteRep(repId);
+    await _loadReps();
+
+    if (mounted) {
+      context.showInfo('Rep deleted');
     }
   }
 
@@ -65,89 +77,42 @@ class _SessionDetailPageState extends State<SessionDetailPage> {
     final rep = _reps[index];
     final newSide = rep.side == 'L' ? 'R' : 'L';
 
-    // Get rep ID from database
-    final db = await _dbService.database;
-    final result = await db.query(
-      'session_reps',
-      where: 'session_id = ?',
-      whereArgs: [widget.session.id],
-      orderBy: 'rep_start_time ASC',
-    );
-
-    if (index < result.length) {
-      final repId = result[index]['id'] as int;
-      await _dbService.updateRepSide(repId, newSide);
-      await _loadReps();
+    final repId = await _getRepIdByIndex(index);
+    if (repId == null) {
+      if (mounted) context.showError('Rep not found');
+      return;
     }
+
+    await _dbService.updateRepSide(repId, newSide);
+    await _loadReps();
   }
 
   Future<void> _cloneRep(int index) async {
     if (_reps.isEmpty || index >= _reps.length) return;
 
-    final count = await showDialog<int>(
-      context: context,
-      builder: (ctx) {
-        final controller = TextEditingController(text: '1');
-        return AlertDialog(
-          title: const Text('Clone Rep'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('How many copies do you want to create?'),
-              const SizedBox(height: 16),
-              TextField(
-                controller: controller,
-                keyboardType: TextInputType.number,
-                autofocus: true,
-                decoration: const InputDecoration(
-                  labelText: 'Number of copies',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: () {
-                final count = int.tryParse(controller.text);
-                if (count != null && count > 0) {
-                  Navigator.of(ctx).pop(count);
-                }
-              },
-              child: const Text('Clone'),
-            ),
-          ],
-        );
-      },
+    final count = await showIntInputDialog(
+      context,
+      title: 'Clone Rep',
+      label: 'Number of copies',
+      initialValue: 1,
+      min: 1,
+      max: 100,
+      hint: '1',
     );
 
-    if (count != null && count > 0) {
-      // Get rep ID from database
-      final db = await _dbService.database;
-      final result = await db.query(
-        'session_reps',
-        where: 'session_id = ?',
-        whereArgs: [widget.session.id],
-        orderBy: 'rep_start_time ASC',
-      );
+    if (count == null || count <= 0) return;
 
-      if (index < result.length) {
-        final repId = result[index]['id'] as int;
-        await _dbService.cloneRep(repId, count);
-        await _loadReps();
+    final repId = await _getRepIdByIndex(index);
+    if (repId == null) {
+      if (mounted) context.showError('Rep not found');
+      return;
+    }
 
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Created $count ${count == 1 ? "copy" : "copies"}'),
-            ),
-          );
-        }
-      }
+    await _dbService.cloneRep(repId, count);
+    await _loadReps();
+
+    if (mounted) {
+      context.showSuccess('Created $count ${count == 1 ? "copy" : "copies"}');
     }
   }
 
@@ -169,9 +134,7 @@ class _SessionDetailPageState extends State<SessionDetailPage> {
       await _loadReps();
 
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Manual rep added')));
+        context.showInfo('Manual rep added');
       }
     }
   }
@@ -274,17 +237,7 @@ class _SessionDetailPageState extends State<SessionDetailPage> {
   }
 
   Widget _buildHeaderStat(String label, String value) {
-    final appColors = Theme.of(context).extension<AppColors>()!;
-    return Column(
-      children: [
-        Text(label, style: TextStyle(fontSize: 12, color: appColors.statLabel)),
-        const SizedBox(height: 4),
-        Text(
-          value,
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-        ),
-      ],
-    );
+    return HeaderStatDisplay(label: label, value: value);
   }
 }
 
@@ -400,34 +353,28 @@ class _RepCard extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
-                _buildStat(
-                  'Duration',
-                  '${(rep.duration.inMilliseconds / 1000).toStringAsFixed(1)}s',
+                StatDisplay(
+                  label: 'Duration',
+                  value:
+                      '${(rep.duration.inMilliseconds / 1000).toStringAsFixed(1)}s',
                 ),
-                _buildStat('Max', '${rep.peakWeight.toStringAsFixed(1)} kg'),
-                _buildStat('Avg', '${rep.avgWeight.toStringAsFixed(1)} kg'),
-                _buildStat(
-                  'Median',
-                  '${rep.medianWeight.toStringAsFixed(1)} kg',
+                StatDisplay(
+                  label: 'Max',
+                  value: '${rep.peakWeight.toStringAsFixed(1)} kg',
+                ),
+                StatDisplay(
+                  label: 'Avg',
+                  value: '${rep.avgWeight.toStringAsFixed(1)} kg',
+                ),
+                StatDisplay(
+                  label: 'Median',
+                  value: '${rep.medianWeight.toStringAsFixed(1)} kg',
                 ),
               ],
             ),
           ],
         ),
       ),
-    );
-  }
-
-  Widget _buildStat(String label, String value) {
-    return Column(
-      children: [
-        Text(label, style: const TextStyle(fontSize: 10, color: Colors.grey)),
-        const SizedBox(height: 2),
-        Text(
-          value,
-          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
-        ),
-      ],
     );
   }
 }
@@ -534,16 +481,12 @@ class _AddManualRepDialogState extends State<_AddManualRepDialog> {
             final duration = int.tryParse(_durationController.text);
 
             if (weight == null || weight <= 0) {
-              ScaffoldMessenger.of(
-                context,
-              ).showSnackBar(const SnackBar(content: Text('Invalid weight')));
+              context.showError('Invalid weight');
               return;
             }
 
             if (duration == null || duration <= 0) {
-              ScaffoldMessenger.of(
-                context,
-              ).showSnackBar(const SnackBar(content: Text('Invalid duration')));
+              context.showError('Invalid duration');
               return;
             }
 

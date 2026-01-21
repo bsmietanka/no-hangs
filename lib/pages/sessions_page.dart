@@ -5,6 +5,8 @@ import '../services/database_service.dart';
 import '../services/exercise_service.dart';
 import '../theme/app_theme.dart';
 import 'session_detail_page.dart';
+import '../utils/dialog_helper.dart';
+import '../utils/snackbar_helper.dart';
 
 class SessionsPage extends StatefulWidget {
   const SessionsPage({super.key});
@@ -45,42 +47,24 @@ class _SessionsPageState extends State<SessionsPage> {
   }
 
   Future<void> _deleteSession(Session session) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Delete Session'),
-        content: Text(
+    final confirm = await showConfirmDialog(
+      context,
+      title: 'Delete Session',
+      message:
           'Are you sure you want to delete this session?\n\n'
           '${session.exerciseName}\n'
           '${session.formattedDateTime}\n'
           '${session.repCount} reps',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: Text(
-              'Delete',
-              style: TextStyle(
-                color: Theme.of(context).extension<AppColors>()!.dangerZoneText,
-              ),
-            ),
-          ),
-        ],
-      ),
+      confirmText: 'Delete',
+      isDangerous: true,
     );
 
-    if (confirm == true) {
+    if (confirm) {
       await _dbService.deleteSession(session.id);
       await _loadSessions();
 
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Session deleted')));
+        context.showInfo('Session deleted');
       }
     }
   }

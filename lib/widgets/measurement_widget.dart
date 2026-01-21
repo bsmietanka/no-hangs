@@ -10,6 +10,8 @@ import '../services/database_service.dart';
 import '../services/rep_detection_service.dart';
 import '../services/session_service.dart';
 import '../theme/app_theme.dart';
+import 'stat_display.dart';
+import '../utils/snackbar_helper.dart';
 
 /// Simple measurement container (weight in kg, timestamp in microseconds)
 class MeasurementSample {
@@ -419,15 +421,9 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
 
     if (mounted) {
       if (success) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Session saved: ${_sessionService.repCount} reps'),
-          ),
-        );
+        context.showSuccess('Session saved: ${_sessionService.repCount} reps');
       } else {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Error saving session')));
+        context.showError('Error saving session');
       }
     }
   }
@@ -450,22 +446,7 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
   }
 
   Widget _buildStatDisplay(String label, String value, Color color) {
-    final appColors = Theme.of(context).extension<AppColors>()!;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(label, style: TextStyle(fontSize: 10, color: appColors.statLabel)),
-        const SizedBox(height: 2),
-        Text(
-          value,
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.bold,
-            color: color,
-          ),
-        ),
-      ],
-    );
+    return StatDisplay(label: label, value: value, valueColor: color);
   }
 
   void _handleSwipe(DragEndDetails details) async {
