@@ -1,17 +1,21 @@
 # No Hangs
 
-A Flutter-based hangboard training app with Bluetooth connectivity for Tindeq Progressor devices.
+A Flutter-based hangboard training app with Bluetooth connectivity for Tindeq Progressor devices and WH-C06 Bluetooth crane scales.
 
 > **⚠️ Notice:** This project is completely vibe-coded. Expect creative solutions, intuitive design choices, and code that follows the flow rather than formal architecture patterns.
 
 ## Overview
 
-No Hangs is a mobile training application for climbers that connects to Tindeq Progressor (or compatible) force measurement devices via Bluetooth Low Energy (BLE). Track your hangboard sessions, monitor progress over time, and analyze your training data with comprehensive charts and statistics.
+No Hangs is a mobile training application for climbers that connects to force measurement devices via Bluetooth Low Energy (BLE). Track your hangboard sessions, monitor progress over time, and analyze your training data with comprehensive charts and statistics.
+
+Supported devices:
+- **Tindeq Progressor** (or compatible): connected over GATT, with tare command and battery monitoring
+- **WH-C06 Bluetooth crane scale** (advertises as `IF_B7`): weight is decoded from BLE advertisements, no pairing required; tare and battery status are not available, and the sample rate (a few Hz) is lower than the Progressor's
 
 ## Features
 
 ### Core Functionality
-- **BLE Device Integration**: Seamless connection to Tindeq Progressor devices
+- **BLE Device Integration**: Seamless connection to Tindeq Progressor devices and WH-C06 Bluetooth scales
 - **Real-time Measurement**: Live weight tracking with configurable graph windows (10s - 60s)
 - **Automatic Rep Detection**: Configurable threshold-based rep counting
 - **Session Tracking**: Complete session history with SQLite storage
