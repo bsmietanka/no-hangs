@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'widgets/ble_connect_widget.dart';
 import 'widgets/measurement_widget.dart';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'models/connected_device.dart';
 import 'models/exercise.dart';
 import 'services/exercise_service.dart';
 import 'services/theme_service.dart';
@@ -77,7 +77,7 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageState extends State<MyHomePage> {
   // Minimal home page: show BLE connection widget
-  BluetoothDevice? _connectedDevice;
+  ConnectedDevice? _connectedDevice;
   final ValueNotifier<bool> _lastCmdAck = ValueNotifier(false);
   static const String _graphWindowKey = 'graph_window_seconds';
   static const String _repThresholdKey = 'rep_threshold';

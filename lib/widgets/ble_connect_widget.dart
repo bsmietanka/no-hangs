@@ -4,17 +4,22 @@ import 'dart:async';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../services/tindeq_protocol.dart';
+import '../services/whc06_protocol.dart';
+import '../models/connected_device.dart';
 
-/// A minimal widget that scans for BLE devices whose name contains
-/// [targetNamePrefix] (case-insensitive) and allows connecting/disconnecting.
+/// A minimal widget that scans for BLE devices whose name contains one of
+/// [targetNamePatterns] (case-insensitive) and allows connecting/disconnecting.
 class BleConnectWidget extends StatefulWidget {
-  final String targetNamePrefix;
-  final ValueChanged<BluetoothDevice?>? onConnectionChanged;
+  final List<String> targetNamePatterns;
+  final ValueChanged<ConnectedDevice?>? onConnectionChanged;
   final ValueListenable<bool>? ackNotifier;
 
   const BleConnectWidget({
     super.key,
-    this.targetNamePrefix = 'progressor',
+    this.targetNamePatterns = const [
+      'progressor',
+      Whc06Protocol.deviceNamePattern,
+    ],
     this.onConnectionChanged,
     this.ackNotifier,
   });
@@ -25,8 +30,10 @@ class BleConnectWidget extends StatefulWidget {
 
 class _BleConnectWidgetState extends State<BleConnectWidget> {
   BluetoothDevice? _connectedDevice;
+  ForceDeviceType? _deviceType;
   StreamSubscription<BluetoothConnectionState>? _connectionSub;
   TindeqProtocol? _protocol;
+  Whc06Protocol? _whc06;
   int? _batteryVoltage; // in millivolts
   Timer? _batteryTimer;
 
@@ -35,8 +42,24 @@ class _BleConnectWidgetState extends State<BleConnectWidget> {
     _connectionSub?.cancel();
     _batteryTimer?.cancel();
     _protocol?.dispose();
+    _whc06?.dispose();
     super.dispose();
   }
+
+  String _scanResultName(ScanResult r) {
+    // The WH-C06 is advertisement-only, so platformName may be empty;
+    // fall back to the advertised name.
+    final platformName = r.device.platformName;
+    return platformName.isNotEmpty ? platformName : r.advertisementData.advName;
+  }
+
+  bool _matchesTarget(String name) {
+    final lower = name.toLowerCase();
+    return widget.targetNamePatterns.any((p) => lower.contains(p.toLowerCase()));
+  }
+
+  bool _isWhc06Name(String name) =>
+      name.toLowerCase().contains(Whc06Protocol.deviceNamePattern.toLowerCase());
 
   Future<bool> _ensurePermissions() async {
     final messenger = ScaffoldMessenger.of(context);
@@ -51,7 +74,7 @@ class _BleConnectWidgetState extends State<BleConnectWidget> {
     return false;
   }
 
-  Future<BluetoothDevice?> _showDevicePicker() async {
+  Future<ScanResult?> _showDevicePicker() async {
     final messenger = ScaffoldMessenger.of(context);
     if (!await _ensurePermissions()) return null;
     final state = await FlutterBluePlus.adapterState.first;
@@ -65,7 +88,7 @@ class _BleConnectWidgetState extends State<BleConnectWidget> {
     bool scanning = true;
 
     if (!mounted) return null;
-    final chosen = await showDialog<BluetoothDevice>(
+    final chosen = await showDialog<ScanResult>(
       context: context,
       barrierDismissible: false,
       builder: (ctx) {
@@ -74,12 +97,7 @@ class _BleConnectWidgetState extends State<BleConnectWidget> {
             if (sub == null) {
               sub = FlutterBluePlus.scanResults.listen((r) {
                 final filtered = r
-                    .where(
-                      (e) => e.device.platformName.isNotEmpty &&
-                          e.device.platformName.toLowerCase().contains(
-                                widget.targetNamePrefix.toLowerCase(),
-                              ),
-                    )
+                    .where((e) => _matchesTarget(_scanResultName(e)))
                     .toList();
                 setStateDialog(() {
                   results = filtered;
@@ -118,11 +136,12 @@ class _BleConnectWidgetState extends State<BleConnectWidget> {
                           itemCount: results.length,
                           separatorBuilder: (context, index) => const Divider(height: 1),
                           itemBuilder: (context, i) {
-                            final d = results[i].device;
-                            final name = d.platformName.isEmpty ? '(unknown)' : d.platformName;
+                            final result = results[i];
+                            final resultName = _scanResultName(result);
+                            final name = resultName.isEmpty ? '(unknown)' : resultName;
                             return ListTile(
                               title: Text(name),
-                              subtitle: Text(d.remoteId.str),
+                              subtitle: Text(result.device.remoteId.str),
                               onTap: () async {
                                 try {
                                   await FlutterBluePlus.stopScan();
@@ -131,7 +150,7 @@ class _BleConnectWidgetState extends State<BleConnectWidget> {
                                 }
                                 await sub?.cancel();
                                 if (!ctx.mounted) return;
-                                Navigator.of(ctx).pop(d);
+                                Navigator.of(ctx).pop(result);
                               },
                             );
                           },
@@ -175,9 +194,47 @@ class _BleConnectWidgetState extends State<BleConnectWidget> {
     return chosen;
   }
 
-  Future<void> _connectDevice(BluetoothDevice device) async {
+  Future<void> _connectDevice(ScanResult result) async {
+    if (_isWhc06Name(_scanResultName(result))) {
+      await _connectWhc06(result.device);
+    } else {
+      await _connectTindeq(result.device);
+    }
+  }
+
+  /// The WH-C06 broadcasts weight in its advertisements and never accepts a
+  /// GATT connection, so "connecting" just starts a continuous scan.
+  Future<void> _connectWhc06(BluetoothDevice device) async {
     final messenger = ScaffoldMessenger.of(context);
-    setState(() => _connectedDevice = device);
+    _whc06 = Whc06Protocol();
+    final started = await _whc06!.start(device);
+    if (!started) {
+      _showSnackBar(messenger, 'Failed to start WH-C06 weight stream');
+      _whc06?.dispose();
+      _whc06 = null;
+      return;
+    }
+
+    setState(() {
+      _connectedDevice = device;
+      _deviceType = ForceDeviceType.whc06;
+    });
+    widget.onConnectionChanged?.call(
+      ConnectedDevice(
+        device: device,
+        type: ForceDeviceType.whc06,
+        weightStream: _whc06!.weightStream,
+      ),
+    );
+    _showSnackBar(messenger, 'Connected');
+  }
+
+  Future<void> _connectTindeq(BluetoothDevice device) async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() {
+      _connectedDevice = device;
+      _deviceType = ForceDeviceType.tindeq;
+    });
     try {
       await device.connect(license: License.free);
       _connectionSub = device.connectionState.listen((s) {
@@ -187,12 +244,15 @@ class _BleConnectWidgetState extends State<BleConnectWidget> {
           _protocol = null;
           setState(() {
             _connectedDevice = null;
+            _deviceType = null;
             _batteryVoltage = null;
           });
           widget.onConnectionChanged?.call(null);
         }
       });
-      widget.onConnectionChanged?.call(device);
+      widget.onConnectionChanged?.call(
+        ConnectedDevice(device: device, type: ForceDeviceType.tindeq),
+      );
 
       // Initialize protocol handler
       _protocol = TindeqProtocol(
@@ -236,7 +296,10 @@ class _BleConnectWidgetState extends State<BleConnectWidget> {
       _showSnackBar(messenger, 'Failed to connect: $e');
       _protocol?.dispose();
       _protocol = null;
-      setState(() => _connectedDevice = null);
+      setState(() {
+        _connectedDevice = null;
+        _deviceType = null;
+      });
     }
   }
 
@@ -274,16 +337,24 @@ class _BleConnectWidgetState extends State<BleConnectWidget> {
 
   Future<void> _disconnect(BluetoothDevice device) async {
     final messenger = ScaffoldMessenger.of(context);
-    try {
-      await device.disconnect();
-    } catch (e, st) {
-      _log('Disconnect command failed', e, st);
+    if (_deviceType == ForceDeviceType.whc06) {
+      await _whc06?.stop();
+      _whc06?.dispose();
+      _whc06 = null;
+      widget.onConnectionChanged?.call(null);
+    } else {
+      try {
+        await device.disconnect();
+      } catch (e, st) {
+        _log('Disconnect command failed', e, st);
+      }
+      await _connectionSub?.cancel();
     }
-    await _connectionSub?.cancel();
     _stopBatteryTimer();
     _protocol?.dispose();
     setState(() {
       _connectedDevice = null;
+      _deviceType = null;
       _batteryVoltage = null;
       _protocol = null;
     });
@@ -315,8 +386,9 @@ class _BleConnectWidgetState extends State<BleConnectWidget> {
     // Build children list with conditional spacing (smaller gaps)
     final children = <Widget>[];
 
-    // Tare button - leftmost (visible when connected)
-    if (connected) {
+    // Tare button - leftmost (visible when connected to a device that
+    // supports the tare command; the WH-C06 has no control channel)
+    if (connected && _deviceType == ForceDeviceType.tindeq) {
       children.add(
         TextButton(
           onPressed: _sendTare,
@@ -357,9 +429,9 @@ class _BleConnectWidgetState extends State<BleConnectWidget> {
           if (connected) {
             await _disconnect(_connectedDevice!);
           } else {
-            final device = await _showDevicePicker();
-            if (device != null) {
-              await _connectDevice(device);
+            final result = await _showDevicePicker();
+            if (result != null) {
+              await _connectDevice(result);
             }
           }
         },

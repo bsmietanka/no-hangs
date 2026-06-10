@@ -5,6 +5,7 @@ import 'dart:async';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'dart:math' as math;
+import '../models/connected_device.dart';
 import '../models/exercise.dart';
 import '../services/database_service.dart';
 import '../services/rep_detection_service.dart';
@@ -21,11 +22,12 @@ class MeasurementSample {
   MeasurementSample(this.weight, this.useconds) : receivedAt = DateTime.now();
 }
 
-/// Minimal measurement widget: subscribes to the Progressor "Data" characteristic
-/// and maintains a small in-memory buffer of recent weight readings. Shows the
-/// last measurement on screen.
+/// Minimal measurement widget: subscribes to the connected device's weight
+/// source (the Progressor "Data" characteristic, or the WH-C06 advertisement
+/// stream) and maintains a small in-memory buffer of recent weight readings.
+/// Shows the last measurement on screen.
 class MeasurementWidget extends StatefulWidget {
-  final BluetoothDevice? device;
+  final ConnectedDevice? device;
   final int bufferSize;
   final ValueNotifier<bool>? ackNotifier;
   final int graphWindowSeconds;
@@ -60,6 +62,7 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
   final List<MeasurementSample> _buffer = [];
   BluetoothCharacteristic? _dataChar;
   StreamSubscription<List<int>>? _charSub;
+  StreamSubscription<double>? _weightStreamSub;
   Timer? _ackTimer;
   // Graph window duration in seconds (default will be passed from parent)
   int _graphWindowSeconds = 10;
@@ -120,7 +123,7 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
     if (widget.device != null) {
       _sessionService.startSession();
       _loadPersonalBest();
-      _discoverAndSubscribe();
+      _subscribeToDevice();
     }
     // Start timer to update time since last rep every second
     _timeSinceRepTimer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -145,14 +148,15 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
       _loadPersonalBest();
     }
 
-    if (oldWidget.device?.remoteId.str != widget.device?.remoteId.str) {
+    if (oldWidget.device?.device.remoteId.str !=
+        widget.device?.device.remoteId.str) {
       _stopSubscription();
       if (widget.device != null) {
         // Start session time immediately when device connects
         setState(() {
           _sessionService.startSession();
         });
-        _discoverAndSubscribe();
+        _subscribeToDevice();
       } else {
         // Device disconnected - check for unsaved data
         if (_sessionService.hasUnsavedData && widget.selectedExercise != null) {
@@ -229,8 +233,23 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
     }
   }
 
+  void _subscribeToDevice() {
+    final connected = widget.device;
+    if (connected == null) return;
+
+    if (connected.type == ForceDeviceType.whc06) {
+      // WH-C06 weight arrives as a plain kg stream decoded from advertisements
+      _weightStreamSub = connected.weightStream?.listen((kg) {
+        final now = DateTime.now();
+        _addSamples([MeasurementSample(kg, now.microsecondsSinceEpoch)]);
+      });
+    } else {
+      _discoverAndSubscribe();
+    }
+  }
+
   Future<void> _discoverAndSubscribe() async {
-    final device = widget.device;
+    final device = widget.device?.device;
     if (device == null) return;
 
     try {
@@ -364,41 +383,48 @@ class MeasurementWidgetState extends State<MeasurementWidget> {
 
       if (newSamples.isEmpty) return;
 
-      setState(() {
-        _buffer.addAll(newSamples);
-        // Buffer size: 100 measurements per second × graph window seconds
-        final effectiveBufferSize = _graphWindowSeconds * 100;
-        while (_buffer.length > effectiveBufferSize) {
-          _buffer.removeAt(0);
-        }
-        // Update adaptive max weight if any new sample exceeds current max
-        final double observedMax = newSamples
-            .map((s) => s.weight)
-            .reduce((a, b) => a > b ? a : b);
-        if (observedMax > _maxWeight) {
-          _maxWeight = observedMax;
-        }
-        // Track session maximum
-        if (observedMax > _sessionService.sessionMax) {
-          _sessionService.updateSessionMax(observedMax);
-        }
-
-        // Rep detection: process each new sample
-        for (final sample in newSamples) {
-          _repDetector.processSample(
-            sample.weight,
-            sample.receivedAt,
-            widget.currentSide,
-          );
-        }
-      });
+      _addSamples(newSamples);
     } catch (e, st) {
       debugPrint('Failed to process measurement notification: $e');
       debugPrintStack(stackTrace: st);
     }
   }
 
+  void _addSamples(List<MeasurementSample> newSamples) {
+    if (!mounted) return;
+    setState(() {
+      _buffer.addAll(newSamples);
+      // Buffer size: 100 measurements per second × graph window seconds
+      final effectiveBufferSize = _graphWindowSeconds * 100;
+      while (_buffer.length > effectiveBufferSize) {
+        _buffer.removeAt(0);
+      }
+      // Update adaptive max weight if any new sample exceeds current max
+      final double observedMax = newSamples
+          .map((s) => s.weight)
+          .reduce((a, b) => a > b ? a : b);
+      if (observedMax > _maxWeight) {
+        _maxWeight = observedMax;
+      }
+      // Track session maximum
+      if (observedMax > _sessionService.sessionMax) {
+        _sessionService.updateSessionMax(observedMax);
+      }
+
+      // Rep detection: process each new sample
+      for (final sample in newSamples) {
+        _repDetector.processSample(
+          sample.weight,
+          sample.receivedAt,
+          widget.currentSide,
+        );
+      }
+    });
+  }
+
   void _stopSubscription() {
+    _weightStreamSub?.cancel();
+    _weightStreamSub = null;
     _charSub?.cancel();
     _charSub = null;
     if (_dataChar != null && widget.device != null) {
